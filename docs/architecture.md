@@ -54,9 +54,15 @@ decisions (ADRs) and their trade-offs. It describes implemented behaviour.
   and bulk (file chunks). The writer always drains control first, so file
   transfers never delay chat. The end-of-file marker travels on the bulk queue
   so it cannot overtake the last chunk.
-- Concurrency is bounded everywhere: 16 concurrent inbound handshakes, 4
-  concurrent outbound dials, `network.max_connections` sessions,
-  `security.max_untrusted_sessions` unpaired sessions, 8 active transfers.
+- Concurrency and state are bounded everywhere: 16 concurrent inbound
+  handshakes (4 per source IP), 16 dials in flight (4 running at once, trusted
+  peers first), `network.max_connections` sessions,
+  `security.max_untrusted_sessions` unpaired sessions, 256 never-paired peers
+  kept in memory, 8 outgoing and 16 incoming transfers (3 per peer), a
+  per-peer quota of 20 stored messages/group updates/file offers per second
+  (burst 500).
+- Identities that were never paired are kept in memory only; a peer is
+  written to the database when pairing completes.
 
 ## Lifecycle
 
@@ -187,7 +193,10 @@ period.
 ## Groups (ADR-7)
 
 Groups are **owner-authoritative**. The creator is the owner for the group's
-lifetime and the only writer of membership. Each change increments a version
+lifetime and the only writer of membership. The group ID is derived from the
+owner's key: `group_id = SHA-256("LANChat group id v1" ‖ owner SPKI ‖ salt)[:16]`,
+and every snapshot carries the salt, so no other member can claim an
+existing group ID. Each change increments a version
 and produces a complete snapshot (`group.update`). A snapshot is applied only
 if it arrives from the owner over the owner's authenticated session, names the
 same owner as the local copy, and has a strictly higher version. With a single
@@ -260,14 +269,19 @@ the public key and cannot be claimed by another key. No separate signing
 layer or certificate authority is needed. Trade-off: no PKI, so trust must be
 established by people (ADR-4).
 
-**ADR-4 Explicit mutual pairing with a short authentication string.** A
-six-digit code derived from both public keys and the TLS exporter of the
-session is shown on both screens. A man-in-the-middle necessarily terminates
-two different TLS sessions and keys, so the codes would differ. Trust is
-granted only by local user action (request or accept); an unsolicited
-acceptance from the network never grants trust. Trade-off: one manual step per
-pair of users; chosen over trust-on-first-use because the specification
-forbids silent trust.
+**ADR-4 Explicit mutual pairing with a commit-then-reveal verification
+code.** The six-digit code is derived from both public keys, the TLS exporter
+of the session and two random nonces exchanged with commit-then-reveal (the
+initiator commits to its nonce before seeing the responder's). A
+man-in-the-middle terminates two different TLS sessions; because neither side
+can choose its nonce after seeing the other's, it cannot grind sessions in
+the background until the two codes collide — each attempt succeeds with
+probability 10⁻⁶ and is a pairing request the users see. Trust is granted on
+each side only when the local user approved and the remote side approved, on
+the same session; an acceptance without a completed exchange is ignored.
+Trade-off: one manual step per pair of users; chosen over trust-on-first-use
+because the specification forbids silent trust. Details in
+[security.md](security.md).
 
 **ADR-5 Deterministic duplicate-connection resolution** (see Connections).
 Chosen over "only the smaller ID dials", which fails when only one direction

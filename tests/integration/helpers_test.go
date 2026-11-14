@@ -7,8 +7,8 @@ package integration_test
 import (
 	"context"
 	"log/slog"
-	"os"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"

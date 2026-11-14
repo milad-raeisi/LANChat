@@ -339,7 +339,7 @@ func (m *Model) renderMessages() {
 			nameStyle := st.userStyle(string(msg.SenderID))
 			if msg.Outgoing {
 				name = name + " (you)"
-			} else if m.ambiguousName(name) || m.nameCount[strings.ToLower(name)] == 0 {
+			} else if strings.EqualFold(name, textsafe.Line(m.self.DisplayName, 32)) || m.ambiguousName(name) || m.nameCount[strings.ToLower(name)] == 0 {
 				// Names are not identities: show the short peer ID whenever a
 				// name collides with someone else's, imitates "(you)", or
 				// belongs to nobody currently known.

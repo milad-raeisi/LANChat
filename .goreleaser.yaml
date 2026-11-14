@@ -1,0 +1,133 @@
+# GoReleaser configuration for LANChat release artifacts.
+# Local dry run: goreleaser release --snapshot --clean
+version: 2
+
+project_name: lanchat
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: lanchat
+    main: ./cmd/lanchat
+    binary: lanchat
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/milad-raeisi/LANChat/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/milad-raeisi/LANChat/internal/buildinfo.Commit={{ .ShortCommit }}
+      - -X github.com/milad-raeisi/LANChat/internal/buildinfo.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: lanchat-discovery
+    main: ./cmd/lanchat-discovery
+    binary: lanchat-discovery
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/milad-raeisi/LANChat/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/milad-raeisi/LANChat/internal/buildinfo.Commit={{ .ShortCommit }}
+      - -X github.com/milad-raeisi/LANChat/internal/buildinfo.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: lanchat
+    ids: [lanchat]
+    name_template: "lanchat_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - configs/lanchat.example.toml
+
+  - id: lanchat-discovery
+    ids: [lanchat-discovery]
+    name_template: "lanchat-discovery_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - docs/managed-discovery.md
+      - deploy/discovery/discovery.example.toml
+      - deploy/discovery/authorized_peers.example
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Software bill of materials for every archive (requires syft on PATH).
+sboms:
+  - artifacts: archive
+
+nfpms:
+  - id: lanchat-packages
+    ids: [lanchat]
+    package_name: lanchat
+    file_name_template: "lanchat_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    homepage: https://github.com/milad-raeisi/LANChat
+    maintainer: LANChat maintainers
+    description: Secure, terminal-based instant messaging for local networks.
+    license: MIT
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    contents:
+      - src: configs/lanchat.example.toml
+        dst: /usr/share/doc/lanchat/lanchat.example.toml
+      - src: LICENSE
+        dst: /usr/share/doc/lanchat/LICENSE
+
+# Homebrew and WinGet manifests are generated into dist/ for review but are
+# NOT published automatically: publishing requires a tap repository and a
+# winget-pkgs fork with credentials. See docs/installation.md.
+homebrew_casks:
+  - name: lanchat
+    ids: [lanchat]
+    homepage: https://github.com/milad-raeisi/LANChat
+    description: Secure, terminal-based instant messaging for local networks.
+    license: MIT
+    skip_upload: true
+    repository:
+      owner: milad-raeisi
+      name: homebrew-tap
+
+winget:
+  - name: LANChat
+    ids: [lanchat]
+    publisher: LANChat
+    short_description: Secure, terminal-based instant messaging for local networks.
+    license: MIT
+    homepage: https://github.com/milad-raeisi/LANChat
+    skip_upload: true
+    repository:
+      owner: milad-raeisi
+      name: winget-pkgs
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: milad-raeisi
+    name: LANChat
+  draft: true
+  prerelease: auto
+  footer: |
+    Verify downloads with `sha256sum -c checksums.txt`. SBOMs (SPDX JSON) are attached per archive.

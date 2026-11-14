@@ -1,0 +1,18 @@
+# LANChat peers allowed to use this discovery server.
+#
+# One peer ID per line. Each user prints theirs with:
+#
+#   lanchat identity show
+#
+# A peer ID is 32 characters (a-z and 2-7) derived from the user's identity
+# key; it changes only if the user resets their identity. Everything after
+# '#' is a comment and blank lines are ignored.
+#
+# The server re-reads this file within a few seconds of a change. Removing a
+# line revokes access: the peer is refused on its next refresh and is no
+# longer shown to others. Deleting the whole file refuses everyone.
+#
+# Examples (remove the leading '#' and use real IDs):
+#
+# abcdefghijklmnopqrstuvwxyz234567   # alice - laptop
+# 234567abcdefghijklmnopqrstuvwxyz   # bob - workstation

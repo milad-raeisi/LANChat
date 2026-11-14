@@ -1,0 +1,13 @@
+# Build-context exclusions for deploy/discovery/Dockerfile (BuildKit reads
+# <Dockerfile>.dockerignore next to the Dockerfile). Paths are relative to
+# the repository root, which is the build context.
+.git
+.github
+.claude
+**/*.db
+**/*.db-*
+**/*.key
+**/*.pem
+**/*.log
+dist
+deploy/discovery/config

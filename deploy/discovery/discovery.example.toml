@@ -1,0 +1,57 @@
+# lanchat-discovery configuration (TOML).
+#
+#   lanchat-discovery serve --config /etc/lanchat-discovery/discovery.toml
+#
+# Precedence: built-in defaults < this file < LANCHAT_DISCOVERY_* environment
+# variables < command-line flags. Every key below can also be given as a
+# flag (underscores become dashes, e.g. --authorized-peers-file) or as an
+# environment variable (e.g. LANCHAT_DISCOVERY_AUTHORIZED_PEERS_FILE).
+# Relative paths in this file are resolved against this file's directory.
+
+# TCP address to listen on. Clients set managed_server = "<host>:47780".
+listen = ":47780"
+
+# Server identity key, created on first start (owner-only permissions).
+# Its public-key fingerprint is what clients pin; keep this file and back
+# it up, or every client must be updated with a new fingerprint.
+# Default: <user config dir>/lanchat-discovery/identity.key
+# (/data/lanchat-discovery/identity.key in the Docker image).
+# identity_file = "/var/lib/lanchat-discovery/identity.key"
+
+# Alternatively serve a certificate from your own CA. Clients then use
+# managed_ca_file (the CA certificate) instead of a fingerprint, and the
+# certificate must be valid for the host name or IP in managed_server.
+# Both must be set together; identity_file is then ignored. Restart the
+# server after replacing these files.
+# tls_cert_file = "/etc/lanchat-discovery/server.crt"
+# tls_key_file  = "/etc/lanchat-discovery/server.key"
+
+# Who may use the server. One LANChat peer ID per line, as printed by
+# `lanchat identity show`. Re-read automatically when it changes.
+authorized_peers_file = "authorized_peers"
+
+# Accept ANY valid LANChat identity instead (explicit opt-in). Anyone who
+# can reach the port can then register and see every registered peer.
+allow_any = false
+
+# Optional source-address restriction for the API. Empty = any address.
+# allowed_cidrs = ["10.0.0.0/8", "192.168.0.0/16", "fd00::/8"]
+
+# How long an announcement stays valid without a refresh. Clients refresh
+# every discovery.refresh_interval_seconds (30 s by default); keep this at
+# least three times that. Accepts "90s", "2m" or a number of seconds.
+presence_ttl = "90s"
+
+# Maximum number of registered peers; new registrations beyond it get
+# HTTP 503. Each response lists at most 1000 other peers.
+max_peers = 10000
+
+# Per-source-address token bucket (IPv6 sources are grouped per /64).
+# Raise these if many clients share one address (NAT).
+rate_limit = 5    # sustained requests per second
+rate_burst = 20
+
+# Logging. Without log_file, logs go to stderr (recommended for Docker and
+# systemd). Request bodies are never logged.
+log_level = "info"
+# log_file = "/var/log/lanchat-discovery/discovery.log"

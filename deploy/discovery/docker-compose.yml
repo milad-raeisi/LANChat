@@ -1,0 +1,60 @@
+# Sample deployment of the LANChat managed discovery server.
+#
+# 1. Create the configuration directory next to this file and list the
+#    authorized peer IDs (each user runs `lanchat identity show`):
+#
+#      mkdir -p config
+#      cp authorized_peers.example config/authorized_peers
+#      chmod 644 config/authorized_peers     # must be readable by uid 65532
+#
+# 2. Build and start (the build context is the repository root):
+#
+#      docker compose -f deploy/discovery/docker-compose.yml up -d --build
+#
+# 3. Print the fingerprint that clients pin:
+#
+#      docker compose -f deploy/discovery/docker-compose.yml exec lanchat-discovery \
+#        /usr/local/bin/lanchat-discovery fingerprint
+#
+# Edits to config/authorized_peers are picked up within a few seconds; no
+# restart is needed. The whole directory is mounted (not the single file) so
+# that editors which replace the file are seen inside the container.
+
+services:
+  lanchat-discovery:
+    build:
+      context: ../..
+      dockerfile: deploy/discovery/Dockerfile
+    image: lanchat-discovery:latest
+    restart: unless-stopped
+
+    # Host networking (Linux) lets the server see each client's real source
+    # address, which it offers to other peers as the first candidate address.
+    # With bridge networking and published ports, Docker may replace the
+    # source address with a gateway address. If you cannot use host
+    # networking (for example Docker Desktop), remove the next line and
+    # uncomment "ports".
+    network_mode: host
+    # ports:
+    #   - "47780:47780/tcp"
+
+    environment:
+      LANCHAT_DISCOVERY_AUTHORIZED_PEERS_FILE: /config/authorized_peers
+      # Optional: only accept clients from these networks.
+      # LANCHAT_DISCOVERY_ALLOWED_CIDRS: "10.0.0.0/8,192.168.0.0/16"
+      # Optional: use a TOML file instead of (or in addition to) variables.
+      # LANCHAT_DISCOVERY_CONFIG: /config/discovery.toml
+      LANCHAT_DISCOVERY_LOG_LEVEL: info
+
+    volumes:
+      # Persistent server identity (its fingerprint is what clients pin).
+      - lanchat-discovery-data:/data
+      - ./config:/config:ro
+
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  lanchat-discovery-data:

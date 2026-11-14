@@ -92,7 +92,7 @@ func TestPairingAndDirectMessage(t *testing.T) {
 	}
 	eventually(t, "reply", 5*time.Second, func() bool { return milad.hasMessage(dm, "Hi Milad") })
 	rtt, err := milad.Ping(context.Background(), maryam.ID())
-	if err != nil || rtt <= 0 {
+	if err != nil || rtt < 0 {
 		t.Fatalf("ping: %v %v", rtt, err)
 	}
 }

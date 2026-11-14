@@ -120,8 +120,10 @@ func TestSessionExchange(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("message not received")
 	}
+	// The monotonic clock on Windows can be coarser than a loopback round
+	// trip, so a zero RTT is valid; only an error or a negative value is not.
 	rtt, err := cli.Ping(context.Background())
-	if err != nil || rtt <= 0 {
+	if err != nil || rtt < 0 {
 		t.Fatalf("ping: %v %v", rtt, err)
 	}
 	cli.CloseWithError(protocol.CodeShuttingDown, "bye")

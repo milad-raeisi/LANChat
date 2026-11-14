@@ -647,6 +647,10 @@ func cmdPing(m *Model, args []string, _ string) tea.Cmd {
 			if err != nil {
 				return toastMsg{level: "warn", text: "Ping " + p.DisplayName + ": " + err.Error()}
 			}
+			if rtt < 100*time.Microsecond {
+				// Below the resolution of some system clocks (notably Windows).
+				return toastMsg{level: "success", text: "Pong from " + p.DisplayName + ": under 0.1 ms (application round trip over TLS)"}
+			}
 			return toastMsg{level: "success", text: fmt.Sprintf("Pong from %s: %.1f ms (application round trip over TLS)", p.DisplayName, float64(rtt.Microseconds())/1000)}
 		}
 	}

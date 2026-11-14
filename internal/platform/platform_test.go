@@ -18,8 +18,11 @@ func TestResolveForPlatforms(t *testing.T) {
 	if d.Config != filepath.Join(home, ".config", "lanchat") || d.Data != filepath.Join(home, ".local", "share", "lanchat") {
 		t.Fatalf("linux defaults wrong: %+v", d)
 	}
-	d = resolveFor("linux", env(map[string]string{"XDG_CONFIG_HOME": "/x/cfg", "XDG_DATA_HOME": "relative/ignored"}), home)
-	if d.Config != filepath.Join("/x/cfg", "lanchat") {
+	// XDG values must be absolute paths; build one that is absolute on the
+	// host running the test (resolveFor uses the host's path rules).
+	xdgConfig := filepath.Join(t.TempDir(), "cfg")
+	d = resolveFor("linux", env(map[string]string{"XDG_CONFIG_HOME": xdgConfig, "XDG_DATA_HOME": "relative/ignored"}), home)
+	if d.Config != filepath.Join(xdgConfig, "lanchat") {
 		t.Fatalf("XDG_CONFIG_HOME not honoured: %+v", d)
 	}
 	if d.Data != filepath.Join(home, ".local", "share", "lanchat") {
@@ -83,6 +86,7 @@ func TestInstanceLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer l.Release()
 	if _, err := AcquireLock(p); !errors.Is(err, ErrLocked) {
 		// flock locks are per open file description, so a second open in the
 		// same process must fail to acquire.

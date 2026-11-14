@@ -91,19 +91,25 @@ func TestSASSymmetricAndSessionBound(t *testing.T) {
 	a, _ := Generate()
 	b, _ := Generate()
 	ex := []byte("exporter-secret-0123456789abcdef")
-	s1 := SAS(SPKI(a.PublicKey()), SPKI(b.PublicKey()), ex)
-	s2 := SAS(SPKI(b.PublicKey()), SPKI(a.PublicKey()), ex)
+	ni, nr := []byte("initiator-nonce"), []byte("responder-nonce")
+	s1 := SAS(SPKI(a.PublicKey()), SPKI(b.PublicKey()), ex, ni, nr)
+	s2 := SAS(SPKI(b.PublicKey()), SPKI(a.PublicKey()), ex, ni, nr)
 	if s1 != s2 {
 		t.Fatalf("SAS not symmetric: %s vs %s", s1, s2)
 	}
 	if !regexp.MustCompile(`^\d{3} \d{3}$`).MatchString(s1) {
 		t.Fatalf("bad SAS format %q", s1)
 	}
-	s3 := SAS(SPKI(a.PublicKey()), SPKI(b.PublicKey()), []byte("other-session"))
+	s3 := SAS(SPKI(a.PublicKey()), SPKI(b.PublicKey()), []byte("other-session"), ni, nr)
 	m, _ := Generate()
-	s4 := SAS(SPKI(a.PublicKey()), SPKI(m.PublicKey()), ex)
-	if s3 == s1 && s4 == s1 {
-		t.Fatal("SAS does not depend on session or keys")
+	s4 := SAS(SPKI(a.PublicKey()), SPKI(m.PublicKey()), ex, ni, nr)
+	s5 := SAS(SPKI(a.PublicKey()), SPKI(b.PublicKey()), ex, ni, []byte("other-nonce"))
+	s6 := SAS(SPKI(a.PublicKey()), SPKI(b.PublicKey()), ex, nr, ni)
+	if s3 == s1 && s4 == s1 && s5 == s1 && s6 == s1 {
+		t.Fatal("SAS does not depend on session, keys, nonces or roles")
+	}
+	if PairingCommit(ni) == PairingCommit(nr) || len(PairingCommit(ni)) != 64 {
+		t.Fatal("PairingCommit")
 	}
 }
 

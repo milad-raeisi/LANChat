@@ -82,8 +82,8 @@ func TestMutualAuthentication(t *testing.T) {
 	if string(e1) != string(e2) {
 		t.Fatal("exporter values differ between endpoints")
 	}
-	if identity.SAS(identity.SPKI(a.PublicKey()), identity.SPKI(b.PublicKey()), e1) !=
-		identity.SAS(identity.SPKI(b.PublicKey()), identity.SPKI(a.PublicKey()), e2) {
+	if identity.SAS(identity.SPKI(a.PublicKey()), identity.SPKI(b.PublicKey()), e1, []byte("i"), []byte("r")) !=
+		identity.SAS(identity.SPKI(b.PublicKey()), identity.SPKI(a.PublicKey()), e2, []byte("i"), []byte("r")) {
 		t.Fatal("pairing codes differ")
 	}
 }

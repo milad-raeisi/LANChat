@@ -20,6 +20,8 @@ const (
 	TypePong        = "pong"
 	TypePresence    = "presence"
 	TypePairRequest = "pair.request"
+	TypePairNonce   = "pair.nonce"
+	TypePairReveal  = "pair.reveal"
 	TypePairAccept  = "pair.accept"
 	TypePairReject  = "pair.reject"
 	TypePairRevoke  = "pair.revoke"
@@ -285,14 +287,48 @@ func (p *Presence) Validate() error {
 	return nil
 }
 
-// PairRequest asks the receiver to approve the sender as a trusted peer.
+// PairRequest starts pairing. Commit is SHA-256 over the initiator's secret
+// pairing nonce (see identity.PairingCommit); the nonce is revealed only
+// after the responder has sent its own nonce, so neither side can choose
+// its nonce to steer the verification code (commit-then-reveal).
 type PairRequest struct {
 	DisplayName string `json:"display_name"`
+	Commit      string `json:"commit"`
 }
 
 // Validate implements Validator.
 func (p *PairRequest) Validate() error {
+	if !validHex(p.Commit, 64) {
+		return invalid("pair.commit")
+	}
 	return validText("pair.display_name", p.DisplayName, MaxNameBytes, false)
+}
+
+// PairNonce carries a pairing nonce: the responder's nonce (pair.nonce) or
+// the initiator's revealed nonce (pair.reveal).
+type PairNonce struct {
+	Nonce string `json:"nonce"`
+}
+
+// Validate implements Validator.
+func (p *PairNonce) Validate() error {
+	if !validHex(p.Nonce, 64) {
+		return invalid("pair.nonce")
+	}
+	return nil
+}
+
+func validHex(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // PairResponse answers a PairRequest (pair.accept / pair.reject) or informs
@@ -379,7 +415,10 @@ type GroupMember struct {
 
 // GroupUpdate is an owner-authored snapshot of a group's state.
 type GroupUpdate struct {
-	GroupID string        `json:"group_id"`
+	GroupID string `json:"group_id"`
+	// Salt binds the group ID to the owner's key: GroupID must equal
+	// rooms.DeriveGroupID(owner key, Salt), so no one else can claim it.
+	Salt    string        `json:"salt"`
 	Name    string        `json:"name"`
 	OwnerID string        `json:"owner_id"`
 	Version uint64        `json:"version"`
@@ -397,6 +436,9 @@ const (
 func (g *GroupUpdate) Validate() error {
 	if !ValidID(g.GroupID) {
 		return invalid("group id")
+	}
+	if !validHex(g.Salt, 32) {
+		return invalid("group salt")
 	}
 	if err := validText("group.name", g.Name, 128, false); err != nil {
 		return err

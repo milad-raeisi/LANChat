@@ -260,19 +260,30 @@ func LoadOrCreate(path string) (id *Identity, created bool, err error) {
 	return id, true, nil
 }
 
+// PairingCommit returns the commitment to a pairing nonce, as hex.
+func PairingCommit(nonce []byte) string {
+	h := sha256.New()
+	h.Write([]byte("LANChat pairing commit v1"))
+	h.Write(nonce)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // SAS computes the six-digit short authentication string shown to both users
-// during pairing. It binds both public keys and the TLS exporter secret of
-// the session, so a man-in-the-middle (who necessarily terminates two
-// different TLS sessions) produces different codes on each side.
-func SAS(spkiA, spkiB, exporter []byte) string {
+// during pairing. It binds both public keys, the TLS exporter secret of the
+// session, and the two pairing nonces exchanged with commit-then-reveal.
+// Because the initiator commits to its nonce before seeing the responder's,
+// and the responder chooses its nonce before seeing the initiator's, a
+// man-in-the-middle cannot steer the codes on two sessions to match; each
+// attempt succeeds with probability 10^-6 and costs a visible pairing request.
+func SAS(spkiA, spkiB, exporter, initiatorNonce, responderNonce []byte) string {
 	a, b := spkiA, spkiB
 	if string(b) < string(a) {
 		a, b = b, a
 	}
 	h := sha256.New()
-	h.Write([]byte("LANChat SAS v1"))
+	h.Write([]byte("LANChat SAS v2"))
 	var l [4]byte
-	for _, part := range [][]byte{a, b, exporter} {
+	for _, part := range [][]byte{a, b, exporter, initiatorNonce, responderNonce} {
 		binary.BigEndian.PutUint32(l[:], uint32(len(part)))
 		h.Write(l[:])
 		h.Write(part)

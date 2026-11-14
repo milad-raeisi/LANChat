@@ -410,15 +410,18 @@ func (s *Store) CountQueued(ctx context.Context, peer identity.PeerID) (int, err
 	return n, err
 }
 
-// MarkDelivery sets the status of one delivery row. Moving to "sent"
-// increments the attempt counter. A delivered row is never downgraded.
+// MarkDelivery records a local send outcome for one delivery row. Moving to
+// "sent" increments the attempt counter. Only rows that are still pending or
+// sent change: the recipient's acknowledgement (delivered or rejected, see
+// ApplyAck) can arrive before the sender records "sent" — on a fast network
+// it often does — and must never be overwritten by it.
 func (s *Store) MarkDelivery(ctx context.Context, seq int64, peer identity.PeerID, status DeliveryStatus, errText string) error {
 	inc := 0
 	if status == DeliverySent {
 		inc = 1
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE deliveries SET status = ?, error = ?, updated_at = ?, attempts = attempts + ?
-		WHERE message_seq = ? AND peer_id = ? AND status != 'delivered'`,
+		WHERE message_seq = ? AND peer_id = ? AND status IN ('pending', 'sent')`,
 		string(status), errText, ms(time.Now()), inc, seq, string(peer))
 	return err
 }

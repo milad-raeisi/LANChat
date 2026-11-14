@@ -208,6 +208,35 @@ func TestMessagesDeliveriesAndDedup(t *testing.T) {
 	}
 }
 
+// The recipient's answer can be applied before the sender marks the row as
+// sent (the ack overtakes the local database write). The answer must win.
+func TestAckBeforeSentIsNotOverwritten(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	self, _ := newPeer(t)
+	peer, _ := newPeer(t)
+	for _, tc := range []struct {
+		name string
+		ack  DeliveryStatus
+	}{{"rejected", DeliveryFailed}, {"delivered", DeliveryDelivered}} {
+		m := &Message{ID: protocol.NewID(), ConversationID: GeneralRoomID, SenderID: self, SenderName: "me", Body: tc.name,
+			SentAt: time.Now(), ReceivedAt: time.Now(), Outgoing: true}
+		if _, err := s.InsertMessage(ctx, m, []identity.PeerID{peer}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.ApplyAck(ctx, self, peer, m.ID, tc.ack, "rejected by recipient"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MarkDelivery(ctx, m.Seq, peer, DeliverySent, ""); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := s.GetMessage(ctx, m.Seq)
+		if tc.ack == DeliveryFailed && got.Delivery.Failed != 1 || tc.ack == DeliveryDelivered && got.Delivery.Delivered != 1 {
+			t.Fatalf("%s ack overwritten by a late 'sent': %+v", tc.name, got.Delivery)
+		}
+	}
+}
+
 func TestGroupsAndTransfers(t *testing.T) {
 	s, _ := openTemp(t)
 	ctx := context.Background()

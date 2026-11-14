@@ -12,19 +12,24 @@ SQLite is a pure-Go implementation.
 ```sh
 git clone https://github.com/milad-raeisi/LANChat.git
 cd LANChat
-make build          # binaries in ./bin
-make test           # all tests
-make race           # all tests with the race detector
-make lint           # gofmt, go vet, staticcheck, invisible-Unicode guard
-make vuln           # govulncheck
+make build
+make test race lint vuln
 ```
+
+`make build` puts the binaries in `./bin`; `test`/`race` run all tests
+without/with the race detector; `lint` runs gofmt, go vet, staticcheck and the
+invisible-Unicode guard; `vuln` runs govulncheck. `make help` lists all
+targets.
 
 Run a development profile that does not touch your real data:
 
 ```sh
 LANCHAT_HOME=/tmp/lanchat-a ./bin/lanchat
-LANCHAT_HOME=/tmp/lanchat-b ./bin/lanchat   # second profile, choose another port in the wizard
+LANCHAT_HOME=/tmp/lanchat-b ./bin/lanchat
 ```
+
+For the second profile choose another port in the wizard (Advanced network
+configuration).
 
 ## Code layout
 

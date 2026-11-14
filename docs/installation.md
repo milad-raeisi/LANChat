@@ -70,10 +70,13 @@ contains archives for `darwin`, `linux` and `windows` on `amd64` and `arm64`,
 archive. Verify and install manually:
 
 ```sh
-sha256sum -c checksums.txt --ignore-missing        # shasum -a 256 -c on macOS
+sha256sum -c checksums.txt --ignore-missing
 tar -xzf lanchat_<version>_linux_amd64.tar.gz
 install -m 755 lanchat ~/.local/bin/
 ```
+
+On macOS use `shasum -a 256 -c checksums.txt --ignore-missing` instead of
+`sha256sum`.
 
 Debian/Ubuntu: `sudo apt install ./lanchat_<version>_linux_amd64.deb`.
 Fedora/RHEL: `sudo dnf install ./lanchat_<version>_linux_amd64.rpm`.
@@ -93,9 +96,11 @@ the tap/fork and credentials exist.
 ## After installing
 
 ```sh
-lanchat            # first run starts the setup wizard
-lanchat doctor     # checks network, identity and discovery
+lanchat
 ```
+
+The first run starts the setup wizard. If peers do not appear, run
+`lanchat doctor` to check network, identity and discovery.
 
 - **macOS:** allow your terminal to "find devices on local networks" when asked
   (System Settings › Privacy & Security › Local Network).

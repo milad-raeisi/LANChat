@@ -5,13 +5,13 @@ Every key, with its default, is listed in
 [configs/lanchat.example.toml](../configs/lanchat.example.toml) (a test keeps
 that file in sync with the code).
 
-```sh
-lanchat config path        # where the file is
-lanchat config show        # effective configuration (defaults included)
-lanchat config edit        # open in $VISUAL / $EDITOR, then validate
-lanchat config validate    # check without starting
-lanchat --setup            # rerun the wizard, keeping your identity and data
-```
+| Command | Purpose |
+|---|---|
+| `lanchat config path` | where the file is |
+| `lanchat config show` | effective configuration (defaults included) |
+| `lanchat config edit` | open in `$VISUAL` / `$EDITOR`, then validate |
+| `lanchat config validate` | check without starting |
+| `lanchat --setup` | rerun the wizard, keeping your identity and data |
 
 Keys missing from the file use defaults; unknown keys are reported as
 warnings. LANChat never rewrites the file on upgrade — only the wizard and the

@@ -200,12 +200,20 @@ Wi-Fi client isolation, or peers on different subnets. See
 ## Development
 
 ```sh
-git clone https://github.com/milad-raeisi/LANChat.git && cd LANChat
-make build        # ./bin/lanchat and ./bin/lanchat-discovery
-make test race    # tests, with the race detector
-make lint vuln    # gofmt, vet, staticcheck, invisible-Unicode guard, govulncheck
-make bench        # benchmarks (results: docs/performance.md)
+git clone https://github.com/milad-raeisi/LANChat.git
+cd LANChat
+make build
+make test race lint vuln
 ```
+
+| Target | What it does |
+|---|---|
+| `make build` | builds `./bin/lanchat` and `./bin/lanchat-discovery` |
+| `make test`, `make race` | all tests, without / with the race detector |
+| `make lint` | gofmt, go vet, staticcheck, invisible-Unicode guard |
+| `make vuln` | govulncheck |
+| `make bench` | benchmarks (results in [docs/performance.md](docs/performance.md)) |
+| `make help` | every target |
 
 Testing layers: unit tests per package (including fuzz tests for the protocol decoder and text
 sanitizer), multi-node integration tests over real TLS sockets in `tests/integration`, CLI

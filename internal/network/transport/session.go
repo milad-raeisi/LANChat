@@ -131,9 +131,10 @@ func (s *Session) LocalAddr() net.Addr { return s.conn.LocalAddr() }
 func (s *Session) CreatedAt() time.Time { return s.createdAt }
 
 // PairingCode returns the six-digit short authentication string for this
-// session. Both ends compute the same value only if no one is in the middle.
-func (s *Session) PairingCode() string {
-	return identity.SAS(s.localSPKI, s.SPKI(), s.exporter)
+// session and the pairing nonces exchanged on it (commit-then-reveal). Both
+// ends compute the same value only if no one is in the middle.
+func (s *Session) PairingCode(initiatorNonce, responderNonce []byte) string {
+	return identity.SAS(s.localSPKI, s.SPKI(), s.exporter, initiatorNonce, responderNonce)
 }
 
 // Done is closed when the session ends.

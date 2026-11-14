@@ -24,6 +24,7 @@ import (
 	"github.com/milad-raeisi/LANChat/internal/protocol"
 	"github.com/milad-raeisi/LANChat/internal/security/identity"
 	"github.com/milad-raeisi/LANChat/internal/security/tlsconf"
+	"github.com/milad-raeisi/LANChat/internal/textsafe"
 )
 
 // Config holds what is needed to establish sessions.
@@ -109,6 +110,7 @@ func Dial(ctx context.Context, cfg *Config, addrs []string, expected identity.Pe
 		per = 2 * time.Second
 	}
 	var errs []error
+	var mismatch error
 	for _, addr := range addrs {
 		if ctx.Err() != nil {
 			break
@@ -123,13 +125,22 @@ func Dial(ctx context.Context, cfg *Config, addrs []string, expected identity.Pe
 		if err != nil {
 			var mm *IdentityMismatchError
 			var iv *IncompatibleVersionError
-			if errors.As(err, &mm) || errors.As(err, &iv) || errors.Is(err, ErrSelfConnection) {
+			if errors.As(err, &iv) || errors.Is(err, ErrSelfConnection) {
 				return nil, err // definitive answers; do not try other addresses
+			}
+			if errors.As(err, &mm) {
+				// A spoofed address must not prevent reaching the real peer
+				// at another address: remember the mismatch and continue.
+				mismatch = err
+				continue
 			}
 			errs = append(errs, fmt.Errorf("%s: %w", addr, err))
 			continue
 		}
 		return s, nil
+	}
+	if mismatch != nil {
+		return nil, mismatch
 	}
 	if len(errs) == 0 {
 		return nil, ctx.Err()
@@ -206,7 +217,7 @@ func handshake(ctx context.Context, cfg *Config, raw net.Conn, outbound bool, ex
 	}
 	if f.Envelope.Type == protocol.TypeError {
 		if em, err := protocol.DecodeBody[protocol.ErrorMsg](f.Envelope); err == nil {
-			return fail(&RemoteError{Code: em.Code, Message: em.Message})
+			return fail(&RemoteError{Code: textsafe.Line(em.Code, 64), Message: textsafe.Line(em.Message, 200)})
 		}
 		return fail(errors.New("peer refused the connection"))
 	}

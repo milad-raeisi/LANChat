@@ -102,7 +102,7 @@ func TestSessionExchange(t *testing.T) {
 	if !cli.Outbound() || srv.Outbound() || cli.DialerID() != b.Identity.ID() || srv.DialerID() != b.Identity.ID() {
 		t.Fatal("direction / dialer bookkeeping wrong")
 	}
-	if srv.PairingCode() != cli.PairingCode() {
+	if srv.PairingCode([]byte("i"), []byte("r")) != cli.PairingCode([]byte("i"), []byte("r")) {
 		t.Fatal("pairing codes differ between ends")
 	}
 	if !bytes.Equal(keyOf(srv), b.Identity.PublicKey()) {

@@ -26,6 +26,7 @@ type GroupMember struct {
 // Group is the local copy of a group's owner-authored state.
 type Group struct {
 	ID             string
+	Salt           string
 	ConversationID string
 	Name           string
 	OwnerID        identity.PeerID
@@ -62,10 +63,10 @@ func (s *Store) SaveGroup(ctx context.Context, g Group) error {
 		g.ConversationID, g.Name, b2i(joined), ms(time.Now())); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO groups (group_id, conversation_id, name, owner_id, version, state)
-		VALUES (?, ?, ?, ?, ?, ?)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO groups (group_id, conversation_id, name, owner_id, version, state, salt)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (group_id) DO UPDATE SET name = excluded.name, version = excluded.version, state = excluded.state`,
-		g.ID, g.ConversationID, g.Name, string(g.OwnerID), int64(g.Version), g.State); err != nil {
+		g.ID, g.ConversationID, g.Name, string(g.OwnerID), int64(g.Version), g.State, g.Salt); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id = ?", g.ID); err != nil {
@@ -87,8 +88,8 @@ func (s *Store) GetGroup(ctx context.Context, id string) (Group, error) {
 		owner   string
 		version int64
 	)
-	err := s.db.QueryRowContext(ctx, "SELECT group_id, conversation_id, name, owner_id, version, state FROM groups WHERE group_id = ?", id).
-		Scan(&g.ID, &g.ConversationID, &g.Name, &owner, &version, &g.State)
+	err := s.db.QueryRowContext(ctx, "SELECT group_id, salt, conversation_id, name, owner_id, version, state FROM groups WHERE group_id = ?", id).
+		Scan(&g.ID, &g.Salt, &g.ConversationID, &g.Name, &owner, &version, &g.State)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Group{}, ErrNotFound
 	}
@@ -141,10 +142,11 @@ func (s *Store) ListGroups(ctx context.Context) ([]Group, error) {
 	return out, nil
 }
 
-// CountGroups returns the number of stored groups.
-func (s *Store) CountGroups(ctx context.Context) (int, error) {
+// CountActiveGroups returns the number of groups the user is an active
+// member of (left, removed and disbanded groups do not count toward limits).
+func (s *Store) CountActiveGroups(ctx context.Context) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM groups").Scan(&n)
+	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM groups WHERE state = 'active'").Scan(&n)
 	return n, err
 }
 

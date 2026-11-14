@@ -17,6 +17,9 @@
 package rooms
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -54,6 +57,26 @@ func ValidateGroupName(name string) error {
 	return nil
 }
 
+// DeriveGroupID computes the group ID owned by the key ownerSPKI with the
+// given salt. A group ID can therefore only be claimed by its owner: another
+// peer would need a SHA-256 preimage to produce a snapshot that verifies.
+func DeriveGroupID(ownerSPKI []byte, salt string) string {
+	h := sha256.New()
+	h.Write([]byte("LANChat group id v1"))
+	h.Write(ownerSPKI)
+	h.Write([]byte(salt))
+	return hex.EncodeToString(h.Sum(nil)[:16])
+}
+
+// NewSalt returns a random group salt.
+func NewSalt() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b[:])
+}
+
 // UpdateAction is the outcome of evaluating an incoming group snapshot.
 type UpdateAction int
 
@@ -78,10 +101,14 @@ type UpdateDecision struct {
 }
 
 // EvaluateUpdate decides whether to apply a group snapshot received from
-// sender. local is nil when the group is unknown.
-func EvaluateUpdate(local *storage.Group, upd *protocol.GroupUpdate, sender, self identity.PeerID) UpdateDecision {
+// sender, whose authenticated key is senderSPKI. local is nil when the group
+// is unknown.
+func EvaluateUpdate(local *storage.Group, upd *protocol.GroupUpdate, sender identity.PeerID, senderSPKI []byte, self identity.PeerID) UpdateDecision {
 	if string(sender) != upd.OwnerID {
 		return UpdateDecision{Reason: "snapshot not sent by the group owner"}
+	}
+	if DeriveGroupID(senderSPKI, upd.Salt) != upd.GroupID {
+		return UpdateDecision{Reason: "group id is not bound to the owner's key"}
 	}
 	selfMember := false
 	for _, m := range upd.Members {
@@ -120,6 +147,7 @@ func EvaluateUpdate(local *storage.Group, upd *protocol.GroupUpdate, sender, sel
 func FromUpdate(upd *protocol.GroupUpdate, state string) storage.Group {
 	g := storage.Group{
 		ID:      upd.GroupID,
+		Salt:    upd.Salt,
 		Name:    upd.Name,
 		OwnerID: identity.PeerID(upd.OwnerID),
 		Version: upd.Version,
@@ -135,6 +163,7 @@ func FromUpdate(upd *protocol.GroupUpdate, state string) storage.Group {
 func ToUpdate(g *storage.Group) *protocol.GroupUpdate {
 	upd := &protocol.GroupUpdate{
 		GroupID: g.ID,
+		Salt:    g.Salt,
 		Name:    g.Name,
 		OwnerID: string(g.OwnerID),
 		Version: g.Version,
@@ -171,13 +200,16 @@ func Recipients(g *storage.Group, self identity.PeerID) []identity.PeerID {
 	return out
 }
 
-// NewGroup creates a group owned by owner.
-func NewGroup(id, name string, owner storage.GroupMember) (storage.Group, error) {
+// NewGroup creates a group owned by owner, whose key is ownerSPKI. The
+// group ID is derived from the key and a fresh salt.
+func NewGroup(ownerSPKI []byte, name string, owner storage.GroupMember) (storage.Group, error) {
 	if err := ValidateGroupName(name); err != nil {
 		return storage.Group{}, err
 	}
+	salt := NewSalt()
 	return storage.Group{
-		ID:      id,
+		ID:      DeriveGroupID(ownerSPKI, salt),
+		Salt:    salt,
 		Name:    strings.TrimSpace(name),
 		OwnerID: owner.PeerID,
 		Version: 1,

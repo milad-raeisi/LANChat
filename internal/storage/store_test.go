@@ -213,7 +213,7 @@ func TestGroupsAndTransfers(t *testing.T) {
 	ctx := context.Background()
 	owner, _ := newPeer(t)
 	member, _ := newPeer(t)
-	g := Group{ID: protocol.NewID(), Name: "Project X", OwnerID: owner, Version: 1, State: GroupActive,
+	g := Group{ID: protocol.NewID(), Salt: protocol.NewID(), Name: "Project X", OwnerID: owner, Version: 1, State: GroupActive,
 		Members: []GroupMember{{PeerID: owner, DisplayName: "Owner"}, {PeerID: member, DisplayName: "Member"}}}
 	if err := s.SaveGroup(ctx, g); err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestGroupsAndTransfers(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.GetGroup(ctx, g.ID)
-	if err != nil || got.Version != 2 || len(got.Members) != 1 || got.HasMember(member) {
+	if err != nil || got.Version != 2 || len(got.Members) != 1 || got.HasMember(member) || got.Salt != g.Salt {
 		t.Fatalf("group: %+v %v", got, err)
 	}
 	c, err := s.GetConversation(ctx, GroupConversationID(g.ID))
@@ -239,6 +239,9 @@ func TestGroupsAndTransfers(t *testing.T) {
 	}
 	if list, _ := s.ListGroups(ctx); len(list) != 1 {
 		t.Fatal("ListGroups")
+	}
+	if n, _ := s.CountActiveGroups(ctx); n != 0 {
+		t.Fatalf("left group counted as active: %d", n)
 	}
 
 	tr := TransferRecord{ID: protocol.NewID(), PeerID: member, Direction: "in", FileName: "a.txt", Size: 3, State: "offered"}

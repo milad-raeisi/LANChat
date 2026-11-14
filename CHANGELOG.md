@@ -25,3 +25,18 @@ separately (currently protocol v1).
 - One-line installers for macOS/Linux (`scripts/install.sh`) and Windows
   (`scripts/install.ps1`) with checksum verification.
 - GoReleaser packaging, GitHub Actions CI and tag-only release workflow.
+
+### Security
+- Pairing codes use commit-then-reveal nonces so they cannot be ground by a
+  man-in-the-middle; trust requires approval by both users on one session.
+- Pairing and file-offer dialogs default to "Later", have no single-key
+  accept and ignore input briefly after opening.
+- Group IDs are bound to the owner's key (database schema version 2).
+- Unpaired identities are not persisted; caps on unknown peers, dials,
+  handshakes per IP and transfers; per-peer storage quota.
+- Remote text is sanitized in all outputs including `lanchat doctor`;
+  colliding or spoofed display names are shown with the short peer ID.
+- Received files carry the macOS quarantine attribute / Windows
+  Mark-of-the-Web.
+- Go toolchain pinned to 1.26.11 and `golang.org/x/net` v0.62.0 (govulncheck
+  clean).

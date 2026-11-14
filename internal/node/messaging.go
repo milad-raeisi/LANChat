@@ -163,8 +163,8 @@ func decodeTrusted(env *protocol.Envelope) (any, error) {
 
 // Per-peer quota for work that writes to the database or opens dialogs.
 const (
-	workPerSec = 20.0
-	workBurst  = 500.0
+	workPerSec = 50.0
+	workBurst  = 1000.0
 )
 
 func (n *Node) allowWork(pid identity.PeerID) bool {

@@ -163,8 +163,8 @@ Chunks for unknown or finished transfers are ignored.
 
 - Envelope rate per session: token bucket, burst 2000, 500/s. Beyond it the
   receiver stops reading (TCP backpressure); it does not disconnect.
-- Per peer: 20 stored messages, group updates or file offers per second,
-  burst 500.
+- Per peer: 50 stored messages, group updates or file offers per second,
+  burst 1000.
 - Heartbeat: `ping` every `heartbeat_interval_seconds`; no frame for three
   intervals closes the session.
 

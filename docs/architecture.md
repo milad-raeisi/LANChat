@@ -59,8 +59,8 @@ decisions (ADRs) and their trade-offs. It describes implemented behaviour.
   peers first), `network.max_connections` sessions,
   `security.max_untrusted_sessions` unpaired sessions, 256 never-paired peers
   kept in memory, 8 outgoing and 16 incoming transfers (3 per peer), a
-  per-peer quota of 20 stored messages/group updates/file offers per second
-  (burst 500).
+  per-peer quota of 50 stored messages/group updates/file offers per second
+  (burst 1000).
 - Identities that were never paired are kept in memory only; a peer is
   written to the database when pairing completes.
 

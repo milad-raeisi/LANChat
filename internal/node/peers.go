@@ -708,6 +708,7 @@ func (n *Node) handleDiscovery(ev discovery.Event) {
 	if a.PeerID == n.id.ID() {
 		return
 	}
+	n.log.Debug("discovery advert", "source", string(a.Source), "peer", string(a.PeerID), "iface", a.Interface, "addrs", len(a.Addrs), "removed", ev.Removed)
 	now := time.Now()
 	changed := false
 	n.mu.Lock()

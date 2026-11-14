@@ -2,6 +2,8 @@ package discovery
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -157,9 +159,25 @@ func (m *MDNS) Run(ctx context.Context, events chan<- Event) error {
 		}()
 	}
 
+	// Continuous querying per RFC 6762 §5.2: the first queries go out after
+	// 1 s, 2 s, 4 s … and the interval doubles up to the refresh interval.
+	// Each round sends a fresh query; the library reports services only in
+	// answer to its own queries, so this schedule is what makes instances
+	// that start at the same time find each other quickly while keeping
+	// multicast traffic low afterwards. Refresh() restarts the fast schedule.
 	fullName := ServiceType + "." + ServiceDomain + "."
+	interval := time.Second
 	for ctx.Err() == nil {
-		lookupCtx, cancel := context.WithTimeout(ctx, m.refresh)
+		lookupCtx, cancel := context.WithTimeout(ctx, interval)
+		reset := make(chan struct{}, 1)
+		go func() {
+			select {
+			case <-m.refreshCh:
+				reset <- struct{}{}
+				cancel()
+			case <-lookupCtx.Done():
+			}
+		}()
 		seen := 0
 		err := dnssd.LookupType(lookupCtx, fullName,
 			func(e dnssd.BrowseEntry) {
@@ -196,12 +214,11 @@ func (m *MDNS) Run(ctx context.Context, events chan<- Event) error {
 				s.LastError = ""
 			}
 		})
-		// A browse round ends when its timeout fires; a Refresh request ends
-		// the wait early. Either way a new query is sent immediately.
 		select {
-		case <-ctx.Done():
-		case <-m.refreshCh:
+		case <-reset:
+			interval = time.Second
 		default:
+			interval = min(interval*2, m.refresh)
 		}
 	}
 	wg.Wait()
@@ -210,6 +227,7 @@ func (m *MDNS) Run(ctx context.Context, events chan<- Event) error {
 
 func (m *MDNS) advertFrom(e dnssd.BrowseEntry) (Advert, bool) {
 	if len(m.ifaces) > 0 && e.IfaceName != "" && !contains(m.ifaces, e.IfaceName) {
+		m.log.Debug("mDNS result ignored: interface not selected", "instance", e.Name, "iface", e.IfaceName)
 		return Advert{}, false
 	}
 	return ParseBrowseEntry(e, m.refresh)
@@ -312,27 +330,78 @@ func Browse(ctx context.Context, d time.Duration, exclude identity.PeerID) ([]Ad
 	return list, nil
 }
 
-// Announce registers self for the lifetime of ctx (used by diagnostics to
-// verify that an advertisement can be published).
-func Announce(ctx context.Context, self Self, ifaces []string) error {
+// ProbeResult is the outcome of ProbeAnnounceAndBrowse.
+type ProbeResult struct {
+	// Announced is true when the probe service was registered (probing and
+	// announcement completed without error).
+	Announced bool
+	// SelfSeen is true when the probe announcement was received back by a
+	// browse on this host, proving the announce/browse path works locally.
+	SelfSeen bool
+	// Peers lists other LANChat instances discovered during the probe.
+	Peers []Advert
+	// Err is the first error encountered.
+	Err error
+}
+
+// ProbeAnnounceAndBrowse publishes a temporary probe service for d and
+// browses at the same time. The probe carries no peer ID, so LANChat peers
+// ignore it; it only proves that advertisement works. exclude is the local
+// peer ID, omitted from Peers.
+func ProbeAnnounceAndBrowse(ctx context.Context, d time.Duration, port int, exclude identity.PeerID) ProbeResult {
 	silenceLibraryLogs()
-	svc, err := dnssd.NewService(dnssd.Config{
-		Name: InstanceName(self.PeerID) + "-doctor", Type: ServiceType, Domain: ServiceDomain,
-		Port: self.Port, Text: TXT(self), Ifaces: ifaces,
-	})
+	ctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	var res ProbeResult
+	var rnd [4]byte
+	_, _ = rand.Read(rnd[:])
+	probeName := fmt.Sprintf("LANChat-doctor-%x", rnd)
+	svc, err := dnssd.NewService(dnssd.Config{Name: probeName, Type: ServiceType, Domain: ServiceDomain, Port: port,
+		Text: map[string]string{"probe": "1"}})
 	if err != nil {
-		return err
+		res.Err = err
+		return res
 	}
 	rp, err := dnssd.NewResponder()
 	if err != nil {
-		return err
+		res.Err = err
+		return res
 	}
 	if _, err := rp.Add(svc); err != nil {
-		return err
+		res.Err = err
+		return res
 	}
-	err = rp.Respond(ctx)
-	if ctx.Err() != nil {
-		return nil
+	respondErr := make(chan error, 1)
+	go func() { respondErr <- rp.Respond(ctx) }()
+
+	var mu sync.Mutex
+	found := map[string]Advert{}
+	err = dnssd.LookupType(ctx, ServiceType+"."+ServiceDomain+".", func(e dnssd.BrowseEntry) {
+		mu.Lock()
+		defer mu.Unlock()
+		if strings.HasPrefix(e.Name, probeName) {
+			res.SelfSeen = true
+			return
+		}
+		if a, ok := ParseBrowseEntry(e, d); ok && a.PeerID != exclude {
+			found[string(a.PeerID)] = a
+		}
+	}, func(dnssd.BrowseEntry) {})
+	if err != nil && ctx.Err() == nil && res.Err == nil {
+		res.Err = err
 	}
-	return err
+	<-ctx.Done()
+	if rerr := <-respondErr; rerr != nil && !errors.Is(rerr, context.Canceled) && !errors.Is(rerr, context.DeadlineExceeded) {
+		if res.Err == nil {
+			res.Err = rerr
+		}
+	} else {
+		res.Announced = true
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, a := range found {
+		res.Peers = append(res.Peers, a)
+	}
+	return res
 }

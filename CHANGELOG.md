@@ -26,6 +26,12 @@ separately (currently protocol v1).
   (`scripts/install.ps1`) with checksum verification.
 - GoReleaser packaging, GitHub Actions CI and tag-only release workflow.
 
+### Fixed
+- A recipient's rejection could be overwritten by the sender's own "sent"
+  update when the acknowledgement arrived first (fast networks), so a
+  rejected message showed "✓ sent" instead of "✗ failed".
+- Windows: the lock holder's PID is readable (shown by `lanchat doctor`).
+
 ### Security
 - Pairing codes use commit-then-reveal nonces so they cannot be ground by a
   man-in-the-middle; trust requires approval by both users on one session.

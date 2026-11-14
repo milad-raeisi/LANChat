@@ -20,16 +20,19 @@ var (
 	ErrClosed       = errors.New("session closed")
 	ErrBackpressure = errors.New("send queue is full")
 	ErrTimeout      = errors.New("peer stopped responding")
-	ErrRateLimited  = errors.New("peer exceeded the message rate limit")
 )
 
 const (
 	ctrlQueue    = 512
 	bulkQueue    = 4
 	writeTimeout = 20 * time.Second
-	// Inbound envelope rate limit (token bucket). Chunks are paced by TCP.
-	rateBurst  = 1000.0
-	ratePerSec = 200.0
+	// Inbound envelope rate limit (token bucket). A peer that exceeds it is
+	// throttled, not disconnected: the session stops reading, so TCP flow
+	// control slows the sender down. This bounds the work any peer can cause
+	// without losing messages from legitimate bursts (for example a queue
+	// flushed after reconnecting). File chunks are paced by TCP alone.
+	rateBurst  = 2000.0
+	ratePerSec = 500.0
 )
 
 // Handler receives frames and the close notification of a session.
@@ -376,9 +379,16 @@ func (s *Session) readLoop(h Handler) {
 			}
 			lastRefill = now
 			if tokens < 1 {
-				s.CloseWithError(protocol.CodeRateLimited, "too many messages")
-				closeErr = ErrRateLimited
-				return
+				wait := time.Duration((1 - tokens) / ratePerSec * float64(time.Second))
+				select {
+				case <-s.closed:
+					closeErr = s.Err()
+					return
+				case <-time.After(wait):
+				}
+				now = time.Now()
+				tokens += now.Sub(lastRefill).Seconds() * ratePerSec
+				lastRefill = now
 			}
 			tokens--
 			if s.handleBuiltin(f.Envelope) {

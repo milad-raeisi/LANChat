@@ -183,7 +183,7 @@ func (n *Node) Peers() []PeerInfo {
 		if a.Connected != b.Connected {
 			return a.Connected
 		}
-		if strings.ToLower(a.DisplayName) != strings.ToLower(b.DisplayName) {
+		if !strings.EqualFold(a.DisplayName, b.DisplayName) {
 			return strings.ToLower(a.DisplayName) < strings.ToLower(b.DisplayName)
 		}
 		return a.ID < b.ID

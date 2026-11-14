@@ -19,16 +19,17 @@ import (
 
 // fakeBackend is an in-memory Backend for UI tests.
 type fakeBackend struct {
-	mu       sync.Mutex
-	cfg      config.Config
-	self     node.SelfInfo
-	peers    []node.PeerInfo
-	convs    []storage.Conversation
-	msgs     map[string][]storage.Message
-	sent     []string
-	paired   map[identity.PeerID]bool
-	events   chan node.Event
-	pairInfo node.PairingInfo
+	mu      sync.Mutex
+	cfg     config.Config
+	self    node.SelfInfo
+	peers   []node.PeerInfo
+	convs   []storage.Conversation
+	msgs    map[string][]storage.Message
+	sent    []string
+	paired  map[identity.PeerID]bool
+	events  chan node.Event
+	net     *node.NetworkStatus
+	members []node.PeerInfo
 }
 
 func newFake(t *testing.T) *fakeBackend {
@@ -64,6 +65,9 @@ func (f *fakeBackend) Config() config.Config     { return f.cfg }
 func (f *fakeBackend) Events() <-chan node.Event { return f.events }
 func (f *fakeBackend) Peers() []node.PeerInfo    { return append([]node.PeerInfo(nil), f.peers...) }
 func (f *fakeBackend) NetworkStatus() node.NetworkStatus {
+	if f.net != nil {
+		return *f.net
+	}
 	return node.NetworkStatus{Port: 47777, ListenAddr: "[::]:47777"}
 }
 func (f *fakeBackend) Peer(id identity.PeerID) (node.PeerInfo, bool) {
@@ -113,7 +117,7 @@ func (f *fakeBackend) ExportConversation(context.Context, string, string, string
 	return 0, nil
 }
 func (f *fakeBackend) Rooms() []node.RoomInfo             { return nil }
-func (f *fakeBackend) RoomMembers(string) []node.PeerInfo { return nil }
+func (f *fakeBackend) RoomMembers(string) []node.PeerInfo { return f.members }
 func (f *fakeBackend) JoinRoom(_ context.Context, n string) (string, error) {
 	return storage.RoomConversationID(n), nil
 }

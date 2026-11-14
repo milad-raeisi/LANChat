@@ -50,7 +50,7 @@ func (d *fakeDiscovery) Run(ctx context.Context, events chan<- discovery.Event) 
 }
 
 type testNode struct {
-	t     *testing.T
+	t     testing.TB
 	name  string
 	home  string
 	id    *identity.Identity
@@ -74,7 +74,7 @@ func newConfig(name, home string) config.Config {
 
 // startNode creates and starts a node. Passing an existing home restarts a
 // node with the same identity and database.
-func startNode(t *testing.T, name, home string, mutate ...func(*config.Config)) *testNode {
+func startNode(t testing.TB, name, home string, mutate ...func(*config.Config)) *testNode {
 	t.Helper()
 	if home == "" {
 		home = t.TempDir()
@@ -142,7 +142,7 @@ func connect(a, b *testNode) {
 	b.advertiseTo(a)
 }
 
-func eventually(t *testing.T, what string, timeout time.Duration, cond func() bool) {
+func eventually(t testing.TB, what string, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -160,7 +160,7 @@ func (n *testNode) connectedTo(o *testNode) bool {
 }
 
 // pair runs the full interactive pairing flow: a requests, b accepts.
-func pair(t *testing.T, a, b *testNode) {
+func pair(t testing.TB, a, b *testNode) {
 	t.Helper()
 	connect(a, b)
 	eventually(t, a.name+" and "+b.name+" connected", 10*time.Second, func() bool { return a.connectedTo(b) && b.connectedTo(a) })

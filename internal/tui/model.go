@@ -144,7 +144,6 @@ type Model struct {
 	refreshQ  bool
 	dirtyConv bool
 	quitting  bool
-	err       error
 	// pendingCmd is run when a dialog that scheduled work opens.
 	pendingCmd tea.Cmd
 }
@@ -164,7 +163,7 @@ func NewModel(be Backend, save func(config.Config) error) *Model {
 	m.vp.MouseWheelEnabled = false
 
 	ta := textarea.New()
-	ta.Placeholder = "Type a message…  (/ for commands, " + firstKey(m.keys.palette, "ctrl+p") + " for the palette)"
+	ta.Placeholder = "Type a message…  (/ for commands, " + pretty(firstKey(m.keys.palette, "ctrl+p")) + " for the palette)"
 	ta.ShowLineNumbers = false
 	ta.Prompt = "› "
 	ta.CharLimit = cfg.Chat.MaxMessageBytes

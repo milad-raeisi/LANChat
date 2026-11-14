@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -120,5 +121,26 @@ func TestLoadMissing(t *testing.T) {
 func TestParseRejectsMalformed(t *testing.T) {
 	if _, _, err := Parse([]byte("[user\nname=")); err == nil {
 		t.Fatal("expected parse error")
+	}
+}
+
+func TestExampleConfigIsValidAndComplete(t *testing.T) {
+	c, res, err := Load(filepath.Join("..", "..", "configs", "lanchat.example.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.UnknownKeys) != 0 {
+		t.Fatalf("example config has keys LANChat does not know: %v", res.UnknownKeys)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("example config does not validate: %v", err)
+	}
+	def := Default()
+	def.User = c.User
+	if len(c.Discovery.StaticPeers) == 0 {
+		c.Discovery.StaticPeers = nil
+	}
+	if !reflect.DeepEqual(c, def) {
+		t.Fatal("example config values differ from the defaults; keep configs/lanchat.example.toml in sync")
 	}
 }

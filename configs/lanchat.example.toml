@@ -1,0 +1,81 @@
+# LANChat example configuration.
+#
+# LANChat creates its configuration with the setup wizard on first launch;
+# you do not need to copy this file. It documents every key and its default.
+# Location: macOS ~/Library/Application Support/LANChat/config.toml
+#           Linux $XDG_CONFIG_HOME/lanchat/config.toml (~/.config/lanchat)
+#           Windows %APPDATA%\LANChat\config.toml
+# Check a file with: lanchat config validate
+config_version = 1
+
+[user]
+display_name = "Milad"          # shown to others; 1-32 characters, not unique
+device_name = "Milad-MacBook"   # helps people tell your devices apart
+
+[network]
+mode = "auto"                   # "auto" (mDNS/static peers) or "managed" (requires discovery.managed_server)
+interface = "auto"              # "auto" = every suitable LAN interface, or a name from `lanchat network interfaces`
+listen_address = ""             # "" = all addresses of the enabled families (one dual-stack socket)
+port = 47777                    # TCP port for encrypted peer connections (1024-65535)
+enable_ipv4 = true
+enable_ipv6 = true
+connection_timeout_seconds = 10 # TCP connect + TLS + hello
+heartbeat_interval_seconds = 15 # a peer silent for 3x this is considered offline
+max_connections = 64
+
+[discovery]
+mdns_enabled = true             # announce/browse _lanchat._tcp.local. on the LAN
+refresh_interval_seconds = 30   # maximum interval between discovery queries
+managed_server = ""             # optional lanchat-discovery server, "host:47780"
+managed_server_fingerprint = "" # SPKI SHA-256 printed by `lanchat-discovery fingerprint`
+managed_ca_file = ""            # alternative to the fingerprint: PEM CA bundle
+static_peers = []               # e.g. ["192.168.1.20:47777", "build-box.lan:47777"]
+
+[security]
+tls_enabled = true              # mandatory; setting false is rejected
+require_peer_approval = true    # mandatory; setting false is rejected
+allow_pairing_requests = true   # false = refuse all incoming pairing requests
+max_untrusted_sessions = 16     # limit on simultaneous connections from unpaired peers
+
+[chat]
+save_history = true             # false = history is deleted when LANChat exits
+max_message_bytes = 16384       # largest message you can send (hard limit 65536)
+queue_offline_messages = true   # keep messages for offline paired peers and retry
+offline_queue_ttl_hours = 168   # give up (mark failed) after this long
+max_queued_per_peer = 500
+max_retry_attempts = 20
+
+[transfer]
+download_dir = ""               # "" = ~/Downloads/LANChat (or <data dir>/downloads)
+max_file_size_mb = 4096         # larger incoming offers are declined automatically
+
+[notifications]
+enabled = true
+bell = false                    # terminal bell for messages and requests (not while typing)
+peer_events = true              # "X is now online" notices
+
+[ui]
+theme = "dark"                  # dark, light, minimal, monochrome
+time_format = "24h"             # or "12h"
+mouse = false                   # true enables wheel scrolling (disables terminal text selection)
+
+[keys]                          # key names as reported by the terminal
+send = ["enter"]
+newline = ["shift+enter", "alt+enter", "ctrl+j"]
+command_palette = ["ctrl+p"]
+search = ["ctrl+f"]
+conversations = ["ctrl+l"]
+refresh = ["ctrl+r"]
+next_panel = ["tab"]
+prev_panel = ["shift+tab"]
+help = ["f1"]
+quit = ["ctrl+c"]
+
+[storage]
+database = ""                   # "" = <data dir>/lanchat.db
+
+[logging]
+level = "info"                  # debug, info, warn, error (message bodies are never logged)
+file = ""                       # "" = <log dir>/lanchat.log
+max_size_mb = 5
+max_files = 3

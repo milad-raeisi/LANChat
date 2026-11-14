@@ -331,3 +331,42 @@ func TestPriorityAndBackpressure(t *testing.T) {
 		t.Fatalf("SendWait on full queue: %v", err)
 	}
 }
+
+func TestBurstIsThrottledNotDisconnected(t *testing.T) {
+	a, b := cfgFor(t, "a"), cfgFor(t, "b")
+	srv, cli, err := pair(t, a, b, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = int(rateBurst) + 1500
+	got := make(chan struct{}, n)
+	h := &countHandler{got: got}
+	srv.Start(h)
+	cli.Start(newRecorder())
+	defer cli.Close(nil)
+	start := time.Now()
+	for i := 0; i < n; i++ {
+		if err := cli.SendWait(context.Background(), protocol.TypePresence, protocol.Presence{DisplayName: "x", Status: "online"}); err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+	}
+	for i := 0; i < n; i++ {
+		select {
+		case <-got:
+		case <-time.After(15 * time.Second):
+			t.Fatalf("only %d of %d frames arrived", i, n)
+		}
+	}
+	if !srv.Alive() {
+		t.Fatal("burst caused a disconnect")
+	}
+	// Frames beyond the burst are paced at ratePerSec.
+	if min := time.Duration(float64(n-int(rateBurst)) / ratePerSec * float64(time.Second) * 0.8); time.Since(start) < min {
+		t.Fatalf("burst was not throttled: %v < %v", time.Since(start), min)
+	}
+}
+
+type countHandler struct{ got chan struct{} }
+
+func (h *countHandler) HandleFrame(*Session, *protocol.Frame) error { h.got <- struct{}{}; return nil }
+func (h *countHandler) SessionClosed(*Session, error)               {}

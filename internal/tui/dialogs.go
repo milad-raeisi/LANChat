@@ -98,7 +98,6 @@ func (d *infoDialog) view(m *Model, maxW, maxH int) string {
 
 type button struct {
 	label  string
-	key    string
 	action func(m *Model) tea.Cmd
 }
 

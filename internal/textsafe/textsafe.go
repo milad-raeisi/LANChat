@@ -13,7 +13,20 @@ import (
 const (
 	zwj  = '\u200d' // zero-width joiner: required for emoji sequences
 	zwnj = '\u200c' // zero-width non-joiner: required by several scripts
+
+	// maxCombining is the number of consecutive combining marks kept.
+	maxCombining = 3
 )
+
+// isBlankLookalike reports printable characters that render as blank space
+// and can be used to make a name look empty or like someone else's.
+func isBlankLookalike(r rune) bool {
+	switch r {
+	case '\u3164', '\u115f', '\u1160', '\uffa0', '\u2800', '\u180e':
+		return true
+	}
+	return false
+}
 
 // isBidiControl reports bidirectional formatting characters that can visually
 // reorder text ("Trojan Source" style spoofing).
@@ -44,6 +57,7 @@ func Text(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	prevCR := false
+	marks := 0
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		i += size
@@ -52,13 +66,22 @@ func Text(s string) string {
 			prevCR = false
 			continue
 		}
+		if unicode.In(r, unicode.Mn, unicode.Me) {
+			// Cap stacked combining marks ("zalgo" text that overflows lines).
+			marks++
+			if marks > maxCombining {
+				continue
+			}
+		} else {
+			marks = 0
+		}
 		switch {
 		case r == '\r':
 			b.WriteByte('\n')
 			prevCR = true
 			continue
-		case r == '\n':
-			if !prevCR {
+		case r == '\n', r == '\u2028', r == '\u2029':
+			if !prevCR || r != '\n' {
 				b.WriteByte('\n')
 			}
 		case r == '\t':
@@ -83,6 +106,9 @@ func Line(s string, maxRunes int) string {
 	space := false
 	n := 0
 	for _, r := range s {
+		if isBlankLookalike(r) {
+			continue
+		}
 		if unicode.IsSpace(r) {
 			space = true
 			continue

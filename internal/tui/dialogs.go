@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -107,10 +108,29 @@ type choiceDialog struct {
 	buttons []button
 	sel     int
 	warn    bool
-	escIdx  int // button activated by Esc; -1 = just close
+	escIdx  int    // button activated by Esc; -1 = just close
+	id      string // de-duplicates queued dialogs (e.g. "pair:<peer>")
+	// guardUntil ignores key presses right after the dialog opens, so text
+	// the user was typing cannot answer a security prompt by accident.
+	guardUntil time.Time
+	guarded    bool
 }
 
+// guardDuration is how long security dialogs ignore input after opening.
+const guardDuration = 800 * time.Millisecond
+
+func (d *choiceDialog) arm(now time.Time) {
+	if d.guarded {
+		d.guardUntil = now.Add(guardDuration)
+	}
+}
+
+func (d *choiceDialog) dialogID() string { return d.id }
+
 func (d *choiceDialog) update(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if time.Now().Before(d.guardUntil) {
+		return false, nil
+	}
 	activate := func(i int) (bool, tea.Cmd) {
 		if i < 0 || i >= len(d.buttons) {
 			return true, nil
@@ -120,21 +140,17 @@ func (d *choiceDialog) update(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return true, d.buttons[i].action(m)
 	}
+	// Deliberately no single-letter shortcuts: choosing a button requires
+	// moving the selection and pressing Enter.
 	switch msg.String() {
-	case "left", "shift+tab", "h":
+	case "left", "shift+tab", "up":
 		d.sel = (d.sel - 1 + len(d.buttons)) % len(d.buttons)
-	case "right", "tab", "l":
+	case "right", "tab", "down":
 		d.sel = (d.sel + 1) % len(d.buttons)
 	case "enter":
 		return activate(d.sel)
 	case "esc":
 		return activate(d.escIdx)
-	default:
-		for i, b := range d.buttons {
-			if b.key != "" && strings.EqualFold(msg.String(), b.key) {
-				return activate(i)
-			}
-		}
 	}
 	return false, nil
 }
@@ -164,7 +180,7 @@ type confirmDialog struct {
 func (d *confirmDialog) build() *choiceDialog {
 	if d.inner == nil {
 		d.inner = &choiceDialog{title: d.title, lines: d.lines, warn: true, escIdx: 1,
-			buttons: []button{{label: d.yes, key: "y", action: d.onYes}, {label: "Cancel", key: "n"}}, sel: 1}
+			buttons: []button{{label: d.yes, action: d.onYes}, {label: "Cancel"}}, sel: 1}
 	}
 	return d.inner
 }
@@ -184,8 +200,20 @@ func fingerprintLines(fp string) []string {
 	return out
 }
 
-// newPairDialog starts outgoing pairing: the user compares the code with
-// the other person before sending the request.
+func pairHeader(m *Model, info node.PairingInfo, p node.PeerInfo) []string {
+	lines := []string{"Device:       " + textsafe.Line(p.DeviceName, 48)}
+	if info.Address != "" {
+		lines = append(lines, "Address:      "+info.Address)
+	}
+	if info.Fingerprint != "" {
+		lines = append(lines, "Fingerprint:")
+		lines = append(lines, fingerprintLines(info.Fingerprint)...)
+	}
+	return lines
+}
+
+// newPairDialog starts outgoing pairing. Starting does not grant trust; the
+// verification code is shown once the peer has answered.
 func newPairDialog(m *Model, id identity.PeerID) dialog {
 	info, err := m.be.PairingInfo(id)
 	p, _ := m.be.Peer(id)
@@ -203,77 +231,95 @@ func newPairDialog(m *Model, id identity.PeerID) dialog {
 		}
 		return &infoDialog{title: "Cannot pair with " + name + " yet", lines: lines}
 	}
-	st := m.st
-	lines := []string{
-		"Device:       " + textsafe.Line(info.DeviceName, 48),
-		"Address:      " + info.Address,
-		"Fingerprint:",
+	if info.Code != "" && info.Initiator {
+		return newPairVerifyDialog(m, id, info.Code)
 	}
-	lines = append(lines, fingerprintLines(info.Fingerprint)...)
-	lines = append(lines, "", "Verification code:  "+st.code.Render(info.Code), "",
-		"Ask "+name+" to read out the code shown on their screen.",
-		"Continue only if it matches exactly. A different code means",
-		"someone may be intercepting the connection.")
+	lines := pairHeader(m, info, p)
+	lines = append(lines, "",
+		"LANChat will exchange a one-time verification code with "+name+".",
+		"Both of you will see six digits; compare them in person or by phone.")
 	if info.Warning != "" {
-		lines = append(lines, "", st.warn.Render("⚠ ")+st.warn.Render(textsafe.Line(info.Warning, 400)))
+		lines = append(lines, "", m.st.warn.Render("⚠ "+textsafe.Line(info.Warning, 400)))
 	}
 	return &choiceDialog{
-		title: "Pair with " + name + "?", lines: lines, warn: info.Warning != "", escIdx: 1,
+		title: "Pair with " + name + "?", lines: lines, warn: info.Warning != "", escIdx: 1, id: "pairstart:" + string(id),
 		buttons: []button{
-			{label: "Codes match – send request", key: "y", action: func(m *Model) tea.Cmd {
+			{label: "Start pairing", action: func(m *Model) tea.Cmd {
 				be := m.be
 				return func() tea.Msg {
 					if err := be.RequestPairing(ctx(), id); err != nil {
 						return toastMsg{level: "error", text: err.Error()}
 					}
-					return toastMsg{level: "info", text: "Pairing request sent to " + name + ". Waiting for them to accept…"}
+					return toastMsg{level: "info", text: "Waiting for " + name + " to answer…"}
 				}
 			}},
-			{label: "Cancel", key: "n"},
+			{label: "Cancel"},
 		},
 	}
 }
 
-// newPairRequestDialog answers an incoming pairing request.
-func newPairRequestDialog(m *Model, id identity.PeerID, code string) dialog {
-	info, err := m.be.PairingInfo(id)
+// newPairVerifyDialog asks the user who started pairing to compare codes.
+func newPairVerifyDialog(m *Model, id identity.PeerID, code string) dialog {
+	info, _ := m.be.PairingInfo(id)
 	p, _ := m.be.Peer(id)
 	name := textsafe.Line(p.DisplayName, 32)
-	if code == "" && err == nil {
+	if code == "" {
+		code = info.Code
+	}
+	lines := pairHeader(m, info, p)
+	lines = append(lines, "", "Verification code:  "+m.st.code.Render(code), "",
+		"Ask "+name+" to read out the code on their screen.",
+		"Choose \"Codes match\" only if it is exactly the same.",
+		"A different code means someone may be intercepting the connection.")
+	return &choiceDialog{
+		title: "Verify " + name, lines: lines, escIdx: 1, sel: 1, guarded: true, id: "pairverify:" + string(id),
+		buttons: []button{
+			{label: "Codes match – pair", action: respondPair(id, name, true)},
+			{label: "Cancel", action: respondPair(id, name, false)},
+		},
+	}
+}
+
+func respondPair(id identity.PeerID, name string, accept bool) func(m *Model) tea.Cmd {
+	return func(m *Model) tea.Cmd {
+		be := m.be
+		return func() tea.Msg {
+			if err := be.RespondPairing(ctx(), id, accept); err != nil {
+				return toastMsg{level: "error", text: err.Error()}
+			}
+			if accept {
+				return toastMsg{level: "info", text: "Approved " + name + ". Pairing completes when they approve too."}
+			}
+			return toastMsg{level: "info", text: "Pairing with " + name + " cancelled."}
+		}
+	}
+}
+
+// newPairRequestDialog answers an incoming pairing request. The safe
+// default is "Later"; accepting requires selecting it explicitly.
+func newPairRequestDialog(m *Model, id identity.PeerID, code string) dialog {
+	info, _ := m.be.PairingInfo(id)
+	p, _ := m.be.Peer(id)
+	name := textsafe.Line(p.DisplayName, 32)
+	if code == "" {
 		code = info.Code
 	}
 	st := m.st
-	lines := []string{"Device:       " + textsafe.Line(p.DeviceName, 48)}
-	if err == nil {
-		lines = append(lines, "Address:      "+info.Address, "Fingerprint:")
-		lines = append(lines, fingerprintLines(info.Fingerprint)...)
-	}
+	lines := pairHeader(m, info, p)
 	lines = append(lines, "", "Verification code:  "+st.code.Render(code), "",
 		"Make sure "+name+" sees exactly the same code before accepting.",
-		"Accepting lets this identity exchange messages and files with you.")
+		"Accepting lets this identity exchange messages and files with you.",
+		"If you did not expect this request, choose Reject.")
 	if p.Warning != "" {
 		lines = append(lines, "", st.warn.Render("⚠ "+textsafe.Line(p.Warning, 400)))
 	}
-	respond := func(accept bool) func(m *Model) tea.Cmd {
-		return func(m *Model) tea.Cmd {
-			be := m.be
-			return func() tea.Msg {
-				if err := be.RespondPairing(ctx(), id, accept); err != nil {
-					return toastMsg{level: "error", text: err.Error()}
-				}
-				if accept {
-					return toastMsg{level: "success", text: "✓ Paired with " + name + "."}
-				}
-				return toastMsg{level: "info", text: "Pairing request from " + name + " rejected."}
-			}
-		}
-	}
 	return &choiceDialog{
-		title: "Pairing request from " + name, lines: lines, warn: p.Warning != "", escIdx: 2,
+		title: "Pairing request from " + name, lines: lines, warn: p.Warning != "", escIdx: 2, sel: 2, guarded: true,
+		id: "pairreq:" + string(id),
 		buttons: []button{
-			{label: "Accept", key: "a", action: respond(true)},
-			{label: "Reject", key: "r", action: respond(false)},
-			{label: "Later", key: "l"},
+			{label: "Accept", action: respondPair(id, name, true)},
+			{label: "Reject", action: respondPair(id, name, false)},
+			{label: "Later"},
 		},
 	}
 }
@@ -303,8 +349,8 @@ func newFileOfferDialog(m *Model, t node.TransferInfo) dialog {
 			}
 		}
 	}
-	return &choiceDialog{title: "Incoming file request", lines: lines, escIdx: -1,
-		buttons: []button{{label: "Accept", key: "a", action: respond(true)}, {label: "Reject", key: "r", action: respond(false)}}}
+	return &choiceDialog{title: "Incoming file request", lines: lines, escIdx: -1, sel: 2, guarded: true, id: "file:" + t.ID,
+		buttons: []button{{label: "Accept", action: respond(true)}, {label: "Reject", action: respond(false)}, {label: "Later"}}}
 }
 
 // --- lists ----------------------------------------------------------------

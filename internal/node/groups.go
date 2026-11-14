@@ -27,10 +27,10 @@ func (n *Node) selfMember() storage.GroupMember {
 // CreateGroup creates a private group owned by the local user and invites
 // the given paired peers.
 func (n *Node) CreateGroup(ctx context.Context, name string, members []identity.PeerID) (string, error) {
-	if c, err := n.store.CountGroups(ctx); err == nil && c >= protocol.MaxGroups {
-		return "", fmt.Errorf("you can have at most %d groups", protocol.MaxGroups)
+	if c, err := n.store.CountActiveGroups(ctx); err == nil && c >= protocol.MaxGroups {
+		return "", fmt.Errorf("you can be in at most %d active groups", protocol.MaxGroups)
 	}
-	g, err := rooms.NewGroup(protocol.NewID(), name, n.selfMember())
+	g, err := rooms.NewGroup(identity.SPKI(n.id.PublicKey()), name, n.selfMember())
 	if err != nil {
 		return "", err
 	}
@@ -187,11 +187,11 @@ func (n *Node) handleGroupUpdate(s *transport.Session, upd *protocol.GroupUpdate
 	var local *storage.Group
 	if g, err := n.store.GetGroup(ctx, upd.GroupID); err == nil {
 		local = &g
-	} else if c, err := n.store.CountGroups(ctx); err == nil && c >= protocol.MaxGroups {
+	} else if c, err := n.store.CountActiveGroups(ctx); err == nil && c >= protocol.MaxGroups {
 		n.log.Warn("ignoring group invitation: group limit reached", "peer", string(pid))
 		return
 	}
-	d := rooms.EvaluateUpdate(local, upd, pid, self)
+	d := rooms.EvaluateUpdate(local, upd, pid, s.SPKI(), self)
 	if d.Action != rooms.Apply {
 		n.log.Debug("group update ignored", "group", upd.GroupID, "reason", d.Reason)
 		return

@@ -218,9 +218,10 @@ Everything after `#` is a comment, and blank lines are ignored. See
   refresh, is removed from the directory and is no longer shown to others.
 - If the file is deleted, every peer is refused (fail closed) until the file
   is restored.
-- If the file becomes invalid while the server is running, the previous list
-  stays in effect and a warning is logged. At startup, a missing or invalid
-  file stops the server with an error that names the offending line.
+- If the file becomes invalid while the server is running, every peer is
+  refused (fail closed) and an error naming the offending line is logged, so a
+  typo can never leave a revoked peer authorized. At startup, a missing or
+  invalid file stops the server with an error.
 - Peer IDs are identifiers, not secrets, but the list does show who uses the
   service.
 

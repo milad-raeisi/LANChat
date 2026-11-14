@@ -87,23 +87,25 @@ type Node struct {
 	dialSem      chan struct{}
 	discEvents   chan discovery.Event
 
-	mu          sync.Mutex
-	name        string
-	device      string
-	peers       map[identity.PeerID]*peerState
-	statics     map[string]*staticTarget
-	known       map[identity.PeerID]storage.Peer
-	rooms       map[string]bool
-	transfers   map[string]*transferState
-	ifaces      []netif.Interface
-	ifaceErr    string
-	netKey      string
-	netChanged  time.Time
-	discoverers []discovery.Discoverer
-	discCancel  context.CancelFunc
-	started     bool
-	closed      bool
-	startedAt   time.Time
+	mu             sync.Mutex
+	name           string
+	device         string
+	peers          map[identity.PeerID]*peerState
+	statics        map[string]*staticTarget
+	known          map[identity.PeerID]storage.Peer
+	fps            map[identity.PeerID]string
+	handshakesByIP map[string]int
+	rooms          map[string]bool
+	transfers      map[string]*transferState
+	ifaces         []netif.Interface
+	ifaceErr       string
+	netKey         string
+	netChanged     time.Time
+	discoverers    []discovery.Discoverer
+	discCancel     context.CancelFunc
+	started        bool
+	closed         bool
+	startedAt      time.Time
 }
 
 // New validates options and creates a Node. Call Start to run it.
@@ -119,18 +121,20 @@ func New(opts Options) (*Node, error) {
 	}
 	n := &Node{
 		cfg: opts.Config, dirs: opts.Dirs, id: opts.Identity, store: opts.Store, log: opts.Logger, opts: opts,
-		events:       make(chan Event, 2048),
-		wake:         make(chan struct{}, 1),
-		handshakeSem: make(chan struct{}, 16),
-		dialSem:      make(chan struct{}, 4),
-		discEvents:   make(chan discovery.Event, 256),
-		name:         opts.Config.User.DisplayName,
-		device:       opts.Config.User.DeviceName,
-		peers:        make(map[identity.PeerID]*peerState),
-		statics:      make(map[string]*staticTarget),
-		known:        make(map[identity.PeerID]storage.Peer),
-		rooms:        make(map[string]bool),
-		transfers:    make(map[string]*transferState),
+		events:         make(chan Event, 2048),
+		wake:           make(chan struct{}, 1),
+		handshakeSem:   make(chan struct{}, 16),
+		dialSem:        make(chan struct{}, 4),
+		discEvents:     make(chan discovery.Event, 256),
+		name:           opts.Config.User.DisplayName,
+		device:         opts.Config.User.DeviceName,
+		peers:          make(map[identity.PeerID]*peerState),
+		statics:        make(map[string]*staticTarget),
+		known:          make(map[identity.PeerID]storage.Peer),
+		fps:            make(map[identity.PeerID]string),
+		handshakesByIP: make(map[string]int),
+		rooms:          make(map[string]bool),
+		transfers:      make(map[string]*transferState),
 	}
 	tcfg, err := transport.NewConfig(opts.Identity, n.localHello, opts.Config.ConnectionTimeout(), opts.Config.HeartbeatInterval())
 	if err != nil {
@@ -193,7 +197,7 @@ func (n *Node) Start(parent context.Context) error {
 	}
 	n.mu.Lock()
 	for _, p := range peers {
-		n.known[p.ID] = p
+		n.setKnownLocked(p)
 	}
 	for _, r := range rooms {
 		n.rooms[r] = true

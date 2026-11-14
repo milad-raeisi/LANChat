@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -76,6 +78,11 @@ func TestIncomingVerifiesAndAvoidsCollisions(t *testing.T) {
 	got, _ := os.ReadFile(final)
 	if string(got) != string(data) {
 		t.Fatal("content mismatch")
+	}
+	if runtime.GOOS == "darwin" {
+		if out, err := exec.Command("xattr", "-p", "com.apple.quarantine", final).Output(); err != nil || !strings.Contains(string(out), "LANChat") {
+			t.Fatalf("received file is not quarantined: %q %v", out, err)
+		}
 	}
 	orig, _ := os.ReadFile(filepath.Join(dir, "report.pdf"))
 	if string(orig) != "existing" {

@@ -108,9 +108,11 @@ func (a *authorizer) maybeReload(now time.Time) {
 	}
 	set, err := readAuthorizedPeers(a.path)
 	if err != nil {
-		a.log.Warn("authorized peers file is invalid; keeping the current list", "path", a.path, "err", err)
+		// Fail closed: a typo must never leave a revoked peer authorized.
+		a.log.Error("authorized peers file is invalid; refusing every peer until it is fixed", "path", a.path, "err", err)
+		empty := peerSet{}
+		a.set.Store(&empty)
 		// Remember this version so the error is reported once per change.
-		// After a removal the list stays empty (fail closed).
 		a.modTime, a.size, a.missing = st.ModTime(), st.Size(), false
 		return
 	}

@@ -17,28 +17,36 @@ import (
 	"github.com/milad-raeisi/LANChat/internal/storage"
 )
 
-const pairingWindow = 10 * time.Minute
+// Limits on state that unauthenticated or unpaired peers can create.
+const (
+	maxUnknownPeers    = 256 // discovered peers that were never paired
+	maxDialsInFlight   = 16
+	maxHandshakesPerIP = 4
+)
 
 type peerState struct {
-	id           identity.PeerID
-	displayName  string
-	deviceName   string
-	adverts      map[string]discovery.Advert
-	session      *transport.Session
-	dialing      bool
-	failures     int
-	nextDial     time.Time
-	lastErr      string
-	rooms        map[string]bool
-	status       string
-	warning      string
-	outgoingPair time.Time
-	incomingPair bool
-	lastPairReq  time.Time
-	flushing     bool
-	app          string
-	addr         string
-	lastActive   time.Time
+	id          identity.PeerID
+	displayName string
+	deviceName  string
+	adverts     map[string]discovery.Advert
+	session     *transport.Session
+	dialing     bool
+	failures    int
+	nextDial    time.Time
+	lastErr     string
+	rooms       map[string]bool
+	status      string
+	warning     string
+	pair        *pairState
+	lastPairReq time.Time
+	fingerprint string
+	workTokens  float64
+	workRefill  time.Time
+	lastWarnAt  time.Time
+	flushing    bool
+	app         string
+	addr        string
+	lastActive  time.Time
 }
 
 type staticTarget struct {
@@ -210,9 +218,7 @@ func (n *Node) infoLocked(id identity.PeerID, ps *peerState, now time.Time) Peer
 	if info.Trust == "" {
 		info.Trust = storage.TrustUnknown
 	}
-	if len(k.PublicKey) > 0 {
-		info.Fingerprint = identity.FormatFingerprint(identity.FingerprintSPKI(k.PublicKey))
-	}
+	info.Fingerprint = n.fps[id]
 	if ps != nil {
 		if ps.displayName != "" {
 			info.DisplayName = ps.displayName
@@ -246,14 +252,16 @@ func (n *Node) infoLocked(id identity.PeerID, ps *peerState, now time.Time) Peer
 			info.LastSeen = now
 			info.Status = ps.status
 			if info.Fingerprint == "" {
-				info.Fingerprint = identity.FormatFingerprint(identity.Fingerprint(ps.session.PublicKey()))
+				info.Fingerprint = ps.fingerprint
 			}
 		}
 		info.LastError = ps.lastErr
 		info.Warning = ps.warning
 		info.App = ps.app
-		info.IncomingPairing = ps.incomingPair
-		info.OutgoingPairing = !ps.outgoingPair.IsZero() && now.Sub(ps.outgoingPair) < pairingWindow
+		if p := ps.pair; p != nil && now.Sub(p.started) < pairingWindow {
+			info.IncomingPairing = p.role == roleResponder && p.code != "" && !p.localApproved
+			info.OutgoingPairing = !info.IncomingPairing
+		}
 		for r := range ps.rooms {
 			info.Rooms = append(info.Rooms, r)
 		}
@@ -322,9 +330,30 @@ func (n *Node) acceptLoop() {
 			_ = conn.Close()
 			continue
 		}
+		ip := remoteIP(conn.RemoteAddr())
+		n.mu.Lock()
+		perIP := n.handshakesByIP[ip]
+		if perIP < maxHandshakesPerIP {
+			n.handshakesByIP[ip] = perIP + 1
+		}
+		n.mu.Unlock()
+		if perIP >= maxHandshakesPerIP {
+			_ = conn.Close()
+			continue
+		}
+		releaseIP := func() {
+			n.mu.Lock()
+			if n.handshakesByIP[ip] <= 1 {
+				delete(n.handshakesByIP, ip)
+			} else {
+				n.handshakesByIP[ip]--
+			}
+			n.mu.Unlock()
+		}
 		select {
 		case n.handshakeSem <- struct{}{}:
 		default:
+			releaseIP()
 			n.log.Warn("too many concurrent handshakes; refusing connection", "remote", conn.RemoteAddr().String())
 			_ = conn.Close()
 			continue
@@ -333,6 +362,7 @@ func (n *Node) acceptLoop() {
 		go func() {
 			defer n.wg.Done()
 			defer func() { <-n.handshakeSem }()
+			defer releaseIP()
 			s, err := transport.Accept(n.ctx, n.tcfg, conn)
 			if err != nil {
 				n.log.Debug("inbound handshake failed", "remote", conn.RemoteAddr().String(), "err", err)
@@ -341,6 +371,17 @@ func (n *Node) acceptLoop() {
 			n.register(s, "")
 		}()
 	}
+}
+
+func remoteIP(a net.Addr) string {
+	if ta, ok := a.(*net.TCPAddr); ok {
+		return ta.IP.String()
+	}
+	host, _, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return a.String()
+	}
+	return host
 }
 
 func (n *Node) sessionCount() int {
@@ -381,26 +422,14 @@ func preferredSession(self, remote identity.PeerID, older, newer *transport.Sess
 	return newer
 }
 
-// register adopts a freshly established session.
+// register adopts a freshly established session. Admission limits are
+// checked before anything is written: identities that were never paired are
+// kept in memory only, so connecting with fresh keys cannot grow the database.
 func (n *Node) register(s *transport.Session, staticKey string) {
 	pid := s.PeerID()
 	hello := s.Hello()
 	name, dev := sanitizeName(hello.DisplayName), sanitizeDevice(hello.DeviceName)
 	now := time.Now()
-	ctx, cancel := context.WithTimeout(n.ctx, 5*time.Second)
-	defer cancel()
-	if err := n.store.RecordPeerSeen(ctx, storage.PeerSeen{
-		ID: pid, PublicKey: s.SPKI(), DisplayName: name, DeviceName: dev, Address: s.RemoteAddr().String(), At: now,
-	}); err != nil {
-		n.log.Error("cannot record peer", "peer", string(pid), "err", err)
-		s.CloseWithError(protocol.CodeProtocolViolation, "internal error")
-		return
-	}
-	known, err := n.store.GetPeer(ctx, pid)
-	if err != nil {
-		s.CloseWithError(protocol.CodeProtocolViolation, "internal error")
-		return
-	}
 
 	n.mu.Lock()
 	if n.closed {
@@ -408,14 +437,22 @@ func (n *Node) register(s *transport.Session, staticKey string) {
 		s.CloseWithError(protocol.CodeShuttingDown, "shutting down")
 		return
 	}
-	n.known[pid] = known
-	trusted := known.Trust == storage.TrustTrusted
-	ps := n.peerLocked(pid)
-	if !trusted && ps.session == nil && n.untrustedSessionsLocked() >= n.cfg.Security.MaxUntrustedSessions {
+	_, inDB := n.known[pid]
+	trusted := n.known[pid].Trust == storage.TrustTrusted
+	ps := n.peers[pid]
+	if !trusted && (ps == nil || ps.session == nil) && n.untrustedSessionsLocked() >= n.cfg.Security.MaxUntrustedSessions {
 		n.mu.Unlock()
-		n.log.Warn("too many unpaired peers connected; refusing", "peer", string(pid))
+		n.log.Debug("too many unpaired peers connected; refusing", "peer", string(pid))
 		s.CloseWithError(protocol.CodeTooManyConnections, "too many unpaired connections")
 		return
+	}
+	if ps == nil {
+		if !inDB && n.unknownPeersLocked() >= maxUnknownPeers {
+			n.mu.Unlock()
+			s.CloseWithError(protocol.CodeTooManyConnections, "too many unknown peers")
+			return
+		}
+		ps = n.peerLocked(pid)
 	}
 	var replaced *transport.Session
 	if old := ps.session; old != nil && old.Alive() {
@@ -433,6 +470,9 @@ func (n *Node) register(s *transport.Session, staticKey string) {
 	ps.addr = s.RemoteAddr().String()
 	ps.status = "online"
 	ps.lastActive = now
+	ps.fingerprint = identity.FormatFingerprint(identity.Fingerprint(s.PublicKey()))
+	ps.warning = "" // a successful authenticated session clears stale mismatch warnings
+	ps.pair = nil   // pairing is bound to a session
 	if replaced == nil {
 		ps.rooms = nil
 	}
@@ -443,9 +483,30 @@ func (n *Node) register(s *transport.Session, staticKey string) {
 	}
 	n.mu.Unlock()
 
+	if inDB {
+		ctx, cancel := context.WithTimeout(n.ctx, 5*time.Second)
+		err := n.store.RecordPeerSeen(ctx, storage.PeerSeen{
+			ID: pid, PublicKey: s.SPKI(), DisplayName: name, DeviceName: dev, Address: s.RemoteAddr().String(), At: now,
+		})
+		if err == nil {
+			if p, gerr := n.store.GetPeer(ctx, pid); gerr == nil {
+				n.mu.Lock()
+				n.setKnownLocked(p)
+				n.mu.Unlock()
+			}
+		}
+		cancel()
+		if err != nil {
+			n.log.Error("cannot record peer", "peer", string(pid), "err", err)
+			s.CloseWithError(protocol.CodeProtocolViolation, "internal error")
+			return
+		}
+	}
+
 	n.sessWG.Add(1)
 	s.Start(n)
 	if replaced != nil {
+		n.failTransfersForSession(replaced, "connection replaced")
 		replaced.CloseWithError(protocol.CodeDuplicateSession, "replaced by a newer connection")
 	}
 	n.log.Info("peer connected", "peer", string(pid), "trusted", trusted, "outbound", s.Outbound(), "remote", s.RemoteAddr().String())
@@ -459,6 +520,25 @@ func (n *Node) register(s *transport.Session, staticKey string) {
 	n.emit(Event{Kind: EventPeerOnline, PeerID: pid, PeerName: name})
 }
 
+// unknownPeersLocked counts in-memory peers that were never paired.
+func (n *Node) unknownPeersLocked() int {
+	c := 0
+	for id := range n.peers {
+		if _, ok := n.known[id]; !ok {
+			c++
+		}
+	}
+	return c
+}
+
+// setKnownLocked caches a persisted peer and its formatted fingerprint.
+func (n *Node) setKnownLocked(p storage.Peer) {
+	n.known[p.ID] = p
+	if len(p.PublicKey) > 0 {
+		n.fps[p.ID] = identity.FormatFingerprint(identity.FingerprintSPKI(p.PublicKey))
+	}
+}
+
 // SessionClosed implements transport.Handler.
 func (n *Node) SessionClosed(s *transport.Session, err error) {
 	defer n.sessWG.Done()
@@ -469,7 +549,9 @@ func (n *Node) SessionClosed(s *transport.Session, err error) {
 	var name string
 	if current {
 		ps.session = nil
-		ps.incomingPair = false
+		if ps.pair != nil && ps.pair.session == s {
+			ps.pair = nil
+		}
 		ps.rooms = nil
 		ps.nextDial = time.Now().Add(backoff(0))
 		ps.lastActive = time.Now()
@@ -551,34 +633,45 @@ func (n *Node) dialDue() {
 		n.mu.Unlock()
 		return
 	}
-	sessions, untrusted := 0, 0
+	sessions, untrusted, inflight := 0, 0, 0
 	for id, ps := range n.peers {
-		if ps.session != nil {
+		trustedPeer := n.known[id].Trust == storage.TrustTrusted
+		if ps.session != nil || ps.dialing {
 			sessions++
-			if n.known[id].Trust != storage.TrustTrusted {
+			if !trustedPeer {
 				untrusted++
 			}
 		}
+		if ps.dialing {
+			inflight++
+		}
 	}
-	for id, ps := range n.peers {
-		if sessions+len(jobs) >= n.cfg.Network.MaxConnections {
-			break
-		}
-		if ps.session != nil || ps.dialing || now.Before(ps.nextDial) {
-			continue
-		}
-		addrs := ps.freshAddrs(now)
-		if len(addrs) == 0 {
-			continue
-		}
-		if n.known[id].Trust != storage.TrustTrusted {
-			if untrusted >= n.cfg.Security.MaxUntrustedSessions {
+	// Trusted peers are scheduled first so that floods of unknown adverts
+	// cannot delay reconnecting to the people the user actually talks to.
+	for _, wantTrusted := range []bool{true, false} {
+		for id, ps := range n.peers {
+			if sessions >= n.cfg.Network.MaxConnections || inflight >= maxDialsInFlight {
+				break
+			}
+			trustedPeer := n.known[id].Trust == storage.TrustTrusted
+			if trustedPeer != wantTrusted || ps.session != nil || ps.dialing || now.Before(ps.nextDial) {
 				continue
 			}
-			untrusted++
+			addrs := ps.freshAddrs(now)
+			if len(addrs) == 0 {
+				continue
+			}
+			if !trustedPeer {
+				if untrusted >= n.cfg.Security.MaxUntrustedSessions {
+					continue
+				}
+				untrusted++
+			}
+			ps.dialing = true
+			sessions++
+			inflight++
+			jobs = append(jobs, dialJob{peer: id, addrs: addrs})
 		}
-		ps.dialing = true
-		jobs = append(jobs, dialJob{peer: id, addrs: addrs})
 	}
 	for key, st := range n.statics {
 		if st.self || st.dialing || now.Before(st.nextDial) || now.Sub(st.advert.SeenAt) > st.advert.TTL {
@@ -655,6 +748,11 @@ func (n *Node) dialDone(j dialJob, s *transport.Session, err error) {
 			ps.nextDial = now.Add(backoff(ps.failures))
 			if mismatch {
 				ps.warning = fmt.Sprintf("An address advertised for this peer answered with a different identity (%s). Someone may be spoofing discovery announcements.", mm.Got.Short())
+				if now.Sub(ps.lastWarnAt) < 10*time.Minute {
+					mismatch = false // already warned recently: do not nag
+				} else {
+					ps.lastWarnAt = now
+				}
 			}
 		}
 	}
@@ -728,6 +826,13 @@ func (n *Node) handleDiscovery(ev discovery.Event) {
 		}
 		return
 	}
+	if _, exists := n.peers[a.PeerID]; !exists {
+		if _, known := n.known[a.PeerID]; !known && (ev.Removed || n.unknownPeersLocked() >= maxUnknownPeers) {
+			// Bound the state unknown adverts can create (mDNS floods).
+			n.mu.Unlock()
+			return
+		}
+	}
 	ps := n.peerLocked(a.PeerID)
 	if ev.Removed {
 		if _, ok := ps.adverts[a.Key]; ok {
@@ -787,225 +892,6 @@ func (n *Node) checkImpersonation(pid identity.PeerID, name, device string) {
 	}
 }
 
-// --- pairing & trust --------------------------------------------------------
-
-// PairingInfo is shown to the user before approving a peer.
-type PairingInfo struct {
-	PeerID      identity.PeerID
-	DisplayName string
-	DeviceName  string
-	Fingerprint string
-	Code        string
-	Address     string
-	Warning     string
-}
-
-// PairingInfo returns the verification data for a connected peer.
-func (n *Node) PairingInfo(id identity.PeerID) (PairingInfo, error) {
-	s := n.sessionFor(id)
-	if s == nil {
-		return PairingInfo{}, ErrNotConnected
-	}
-	info, _ := n.Peer(id)
-	return PairingInfo{
-		PeerID: id, DisplayName: info.DisplayName, DeviceName: info.DeviceName,
-		Fingerprint: identity.FormatFingerprint(identity.Fingerprint(s.PublicKey())),
-		Code:        s.PairingCode(), Address: s.RemoteAddr().String(), Warning: info.Warning,
-	}, nil
-}
-
-// RequestPairing records the local user's approval of the peer and asks the
-// peer to approve us. Trust becomes effective when the peer accepts.
-func (n *Node) RequestPairing(_ context.Context, id identity.PeerID) error {
-	s := n.sessionFor(id)
-	if s == nil {
-		return ErrNotConnected
-	}
-	n.mu.Lock()
-	if n.known[id].Trust == storage.TrustTrusted {
-		n.mu.Unlock()
-		return ErrAlreadyPaired
-	}
-	ps := n.peerLocked(id)
-	ps.outgoingPair = time.Now()
-	name := n.name
-	n.mu.Unlock()
-	if err := s.Send(protocol.TypePairRequest, protocol.PairRequest{DisplayName: name}); err != nil {
-		return err
-	}
-	n.emit(Event{Kind: EventPeers})
-	return nil
-}
-
-// RespondPairing answers a pending pairing request from a peer.
-func (n *Node) RespondPairing(ctx context.Context, id identity.PeerID, accept bool) error {
-	n.mu.Lock()
-	ps := n.peers[id]
-	if ps == nil || !ps.incomingPair {
-		n.mu.Unlock()
-		return ErrNoPairingRequest
-	}
-	ps.incomingPair = false
-	s := ps.session
-	n.mu.Unlock()
-	if s == nil || !s.Alive() {
-		return ErrNotConnected
-	}
-	if !accept {
-		_ = s.Send(protocol.TypePairReject, protocol.PairResponse{Reason: "declined"})
-		n.emit(Event{Kind: EventPeers})
-		return nil
-	}
-	if err := n.setTrust(ctx, id, storage.TrustTrusted, true); err != nil {
-		return err
-	}
-	if err := s.Send(protocol.TypePairAccept, protocol.PairResponse{}); err != nil {
-		return err
-	}
-	n.afterTrusted(s, true)
-	n.emit(Event{Kind: EventPairResult, PeerID: id, PeerName: n.peerName(id), Accepted: true})
-	return nil
-}
-
-// Revoke withdraws trust from a peer. Undelivered messages to the peer are
-// marked failed and the peer is informed.
-func (n *Node) Revoke(ctx context.Context, id identity.PeerID) error {
-	if err := n.setTrust(ctx, id, storage.TrustRevoked, false); err != nil {
-		return err
-	}
-	n.mu.Lock()
-	if ps := n.peers[id]; ps != nil {
-		ps.outgoingPair = time.Time{}
-		ps.incomingPair = false
-	}
-	n.mu.Unlock()
-	if s := n.sessionFor(id); s != nil {
-		_ = s.Send(protocol.TypePairRevoke, protocol.PairResponse{Reason: "trust revoked"})
-	}
-	convs, _ := n.store.FailPendingFor(ctx, id, "peer trust revoked")
-	for _, c := range convs {
-		n.emit(Event{Kind: EventDelivery, ConversationID: c})
-	}
-	n.failTransfersFor(id, "peer trust revoked")
-	n.emit(Event{Kind: EventPeers})
-	return nil
-}
-
-func (n *Node) setTrust(ctx context.Context, id identity.PeerID, state storage.TrustState, verified bool) error {
-	if err := n.store.SetTrust(ctx, id, state, verified, time.Now()); err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			return ErrUnknownPeer
-		}
-		return err
-	}
-	p, err := n.store.GetPeer(ctx, id)
-	if err != nil {
-		return err
-	}
-	n.mu.Lock()
-	n.known[id] = p
-	if ps := n.peers[id]; ps != nil && state == storage.TrustTrusted {
-		ps.warning = ""
-	}
-	n.mu.Unlock()
-	n.log.Info("trust changed", "peer", string(id), "trust", string(state))
-	return nil
-}
-
-// afterTrusted runs when a session with a trusted peer becomes usable.
-func (n *Node) afterTrusted(s *transport.Session, includeSent bool) {
-	n.sendPresence(s)
-	n.flush(s.PeerID(), includeSent)
-	n.syncGroupsWith(s)
-}
-
-func (n *Node) handlePairRequest(s *transport.Session, req *protocol.PairRequest) {
-	pid := s.PeerID()
-	if !n.cfg.Security.AllowPairingRequests {
-		_ = s.Send(protocol.TypePairReject, protocol.PairResponse{Reason: "this user does not accept pairing requests"})
-		return
-	}
-	now := time.Now()
-	n.mu.Lock()
-	trusted := n.known[pid].Trust == storage.TrustTrusted
-	ps := n.peerLocked(pid)
-	if trusted {
-		n.mu.Unlock()
-		// We already trust this key; confirm so the peer can complete.
-		_ = s.Send(protocol.TypePairAccept, protocol.PairResponse{})
-		return
-	}
-	if !ps.lastPairReq.IsZero() && now.Sub(ps.lastPairReq) < 3*time.Second {
-		n.mu.Unlock()
-		return // rate limit
-	}
-	ps.lastPairReq = now
-	simultaneous := !ps.outgoingPair.IsZero() && now.Sub(ps.outgoingPair) < pairingWindow
-	if !simultaneous {
-		ps.incomingPair = true
-	} else {
-		ps.outgoingPair = time.Time{}
-	}
-	name := ps.displayName
-	n.mu.Unlock()
-
-	if simultaneous {
-		// Both users approved each other: the local approval was given when
-		// RequestPairing was called.
-		if err := n.setTrust(context.Background(), pid, storage.TrustTrusted, true); err == nil {
-			_ = s.Send(protocol.TypePairAccept, protocol.PairResponse{})
-			n.afterTrusted(s, true)
-			n.emit(Event{Kind: EventPairResult, PeerID: pid, PeerName: name, Accepted: true})
-		}
-		return
-	}
-	n.emit(Event{Kind: EventPairRequest, PeerID: pid, PeerName: name, Code: s.PairingCode()})
-}
-
-func (n *Node) handlePairAccept(s *transport.Session) {
-	pid := s.PeerID()
-	n.mu.Lock()
-	ps := n.peers[pid]
-	pending := ps != nil && !ps.outgoingPair.IsZero() && time.Since(ps.outgoingPair) < pairingWindow
-	if pending {
-		ps.outgoingPair = time.Time{}
-	}
-	already := n.known[pid].Trust == storage.TrustTrusted
-	n.mu.Unlock()
-	if !pending {
-		// An accept we did not ask for must never grant trust.
-		if !already {
-			n.log.Warn("ignoring unsolicited pairing acceptance", "peer", string(pid))
-		}
-		return
-	}
-	if err := n.setTrust(context.Background(), pid, storage.TrustTrusted, true); err != nil {
-		n.log.Error("cannot store trust", "err", err)
-		return
-	}
-	n.afterTrusted(s, true)
-	n.emit(Event{Kind: EventPairResult, PeerID: pid, PeerName: n.peerName(pid), Accepted: true})
-}
-
-func (n *Node) handlePairReject(s *transport.Session, resp *protocol.PairResponse) {
-	pid := s.PeerID()
-	n.mu.Lock()
-	ps := n.peers[pid]
-	pending := ps != nil && !ps.outgoingPair.IsZero()
-	if pending {
-		ps.outgoingPair = time.Time{}
-	}
-	n.mu.Unlock()
-	if pending {
-		n.emit(Event{Kind: EventPairResult, PeerID: pid, PeerName: n.peerName(pid), Accepted: false, Text: sanitizeDevice(resp.Reason)})
-	}
-}
-
-func (n *Node) handlePairRevoke(s *transport.Session) {
-	pid := s.PeerID()
-	n.notice("warn", "%s removed you from their trusted peers. Messages to them will not be accepted until you pair again.", n.peerName(pid))
-}
-
 // Ping measures the round trip time to a connected peer.
 func (n *Node) Ping(ctx context.Context, id identity.PeerID) (time.Duration, error) {
 	s := n.sessionFor(id)
@@ -1020,8 +906,11 @@ func (n *Node) Ping(ctx context.Context, id identity.PeerID) (time.Duration, err
 func (n *Node) sendPresence(s *transport.Session) {
 	n.mu.Lock()
 	p := protocol.Presence{DisplayName: n.name, DeviceName: n.device, Status: "online"}
-	for r := range n.rooms {
-		p.Rooms = append(p.Rooms, r)
+	// Room membership is shared with paired peers only.
+	if n.known[s.PeerID()].Trust == storage.TrustTrusted {
+		for r := range n.rooms {
+			p.Rooms = append(p.Rooms, r)
+		}
 	}
 	n.mu.Unlock()
 	sort.Strings(p.Rooms)
@@ -1060,14 +949,32 @@ func (n *Node) handlePresence(s *transport.Session, p *protocol.Presence) {
 	for _, r := range p.Rooms {
 		ps.rooms[r] = true
 	}
+	_, inDB := n.known[pid]
+	trusted := n.known[pid].Trust == storage.TrustTrusted
+	collision := ""
+	if renamed && trusted {
+		if strings.EqualFold(name, n.name) {
+			collision = "your own name"
+		}
+		for id, k := range n.known {
+			if id != pid && k.Trust == storage.TrustTrusted && strings.EqualFold(k.DisplayName, name) {
+				collision = "the name of another paired peer (#" + id.Short() + ")"
+			}
+		}
+	}
 	n.mu.Unlock()
-	if renamed {
+	if renamed && inDB {
 		_ = n.store.RecordPeerSeen(context.Background(), storage.PeerSeen{ID: pid, PublicKey: s.SPKI(), DisplayName: name, DeviceName: dev, At: time.Now()})
 		if k, err := n.store.GetPeer(context.Background(), pid); err == nil {
 			n.mu.Lock()
-			n.known[pid] = k
+			n.setKnownLocked(k)
 			n.mu.Unlock()
 		}
+	}
+	if collision != "" {
+		text := fmt.Sprintf("Paired peer #%s renamed itself to %q, which is %s. LANChat shows the short ID next to names that collide; check it before trusting what this peer says.", pid.Short(), name, collision)
+		n.log.Warn("paired peer renamed to a colliding name", "peer", string(pid))
+		n.emit(Event{Kind: EventIdentityWarning, PeerID: pid, PeerName: name, Text: text})
 	}
 	n.emit(Event{Kind: EventPeers})
 }

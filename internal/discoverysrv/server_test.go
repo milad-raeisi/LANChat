@@ -490,9 +490,11 @@ func TestAuthorizedPeersReload(t *testing.T) {
 		t.Fatalf("Bob sees %v after authorization", peerIDs(r))
 	}
 
-	// An invalid file keeps the previous list.
+	// An invalid file fails closed: nobody is authorized until it is fixed.
 	writeFile(t, path, "not-a-peer-id\n")
-	announce(t, cb)
+	if err := announceErr(t, cb); !strings.Contains(err.Error(), "refused this identity") {
+		t.Fatalf("invalid allowlist must refuse everyone: %v", err)
+	}
 
 	// Revoke Alice: she is refused and no longer shown to Bob.
 	writeFile(t, path, string(b.ID())+"\n")

@@ -146,6 +146,29 @@ type Model struct {
 	quitting  bool
 	// pendingCmd is run when a dialog that scheduled work opens.
 	pendingCmd tea.Cmd
+	// nameCount counts sanitized display names (lowercase) of all known
+	// peers and the local user, to disambiguate colliding names.
+	nameCount map[string]int
+}
+
+const maxPendingDialogs = 16
+
+type armable interface{ arm(time.Time) }
+type identifiable interface{ dialogID() string }
+
+// setDialog makes d the active dialog and arms its input guard.
+func (m *Model) setDialog(d dialog) {
+	m.dialog = d
+	if a, ok := d.(armable); ok {
+		a.arm(time.Now())
+	}
+}
+
+func dialogKey(d dialog) string {
+	if i, ok := d.(identifiable); ok {
+		return i.dialogID()
+	}
+	return ""
 }
 
 // NewModel creates the chat screen. save persists configuration changes
@@ -323,7 +346,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		cmds = append(cmds, tick())
 		if m.dialog == nil && len(m.pending) > 0 && m.idle() {
-			m.dialog, m.pending = m.pending[0], m.pending[1:]
+			d := m.pending[0]
+			m.pending = m.pending[1:]
+			m.setDialog(d)
 		}
 		if !m.toast.until.IsZero() && time.Now().After(m.toast.until) {
 			m.toast = toast{}
@@ -353,7 +378,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.peers, m.convs = msg.peers, msg.convs
 		m.self = m.be.Self()
+		m.countNames()
 		m.rebuildItems()
+		m.renderMessages()
 		return m, nil
 
 	case messagesMsg:
@@ -401,9 +428,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dialogMsg:
 		if m.dialog == nil {
-			m.dialog = msg.d
+			m.setDialog(msg.d)
 		} else {
-			m.pending = append(m.pending, msg.d)
+			m.queueDialog(msg.d)
 		}
 		cmd := m.pendingCmd
 		m.pendingCmd = nil
@@ -488,6 +515,8 @@ func (m *Model) handleEvent(ev node.Event) tea.Cmd {
 	case node.EventPairRequest:
 		m.queueDialog(newPairRequestDialog(m, ev.PeerID, ev.Code))
 		return m.bell()
+	case node.EventPairCode:
+		m.queueDialog(newPairVerifyDialog(m, ev.PeerID, ev.Code))
 	case node.EventPairResult:
 		if ev.Accepted {
 			m.setToast("success", "✓ Paired with "+ev.PeerName+". You can now exchange messages.")
@@ -561,8 +590,22 @@ func (m *Model) bell() tea.Cmd {
 }
 
 func (m *Model) queueDialog(d dialog) {
+	if k := dialogKey(d); k != "" {
+		if dialogKey(m.dialog) == k {
+			return
+		}
+		for _, p := range m.pending {
+			if dialogKey(p) == k {
+				return
+			}
+		}
+	}
 	if m.dialog == nil && m.idle() {
-		m.dialog = d
+		m.setDialog(d)
+		return
+	}
+	if len(m.pending) >= maxPendingDialogs {
+		m.setToast("warn", "Too many requests are waiting; new ones are ignored until you handle them.")
 		return
 	}
 	m.pending = append(m.pending, d)
@@ -579,7 +622,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		if done {
 			m.dialog = nil
 			if len(m.pending) > 0 && m.idle() {
-				m.dialog, m.pending = m.pending[0], m.pending[1:]
+				d := m.pending[0]
+				m.pending = m.pending[1:]
+				m.setDialog(d)
 			}
 		}
 		return cmd
@@ -798,6 +843,12 @@ func (m *Model) openPeer(id identity.PeerID) tea.Cmd {
 	if p.IncomingPairing {
 		return openDialog(newPairRequestDialog(m, id, ""))
 	}
+	if p.OutgoingPairing {
+		if info, err := m.be.PairingInfo(id); err == nil && info.Initiator && info.Code != "" {
+			return openDialog(newPairVerifyDialog(m, id, info.Code))
+		}
+		return toastCmd("info", "Waiting for %s to answer the pairing request…", textsafe.Line(p.DisplayName, 32))
+	}
 	if p.Trusted() || p.Trust == storage.TrustRevoked && !p.Connected {
 		be := m.be
 		m.focusInput()
@@ -862,18 +913,26 @@ func (m *Model) maybeLoadOlder() tea.Cmd {
 
 // --- sidebar construction --------------------------------------------------
 
+func (m *Model) countNames() {
+	m.nameCount = make(map[string]int, len(m.peers)+1)
+	m.nameCount[strings.ToLower(textsafe.Line(m.self.DisplayName, 32))]++
+	for _, o := range m.peers {
+		m.nameCount[strings.ToLower(textsafe.Line(o.DisplayName, 32))]++
+	}
+}
+
+// ambiguousName reports whether a display name could be confused with
+// another person: it is shared with someone else (including the local
+// user) or imitates the "(you)" marker.
+func (m *Model) ambiguousName(name string) bool {
+	l := strings.ToLower(name)
+	return m.nameCount[l] > 1 || strings.Contains(l, "(you)") || strings.Contains(l, "#")
+}
+
 func (m *Model) peerLabel(p node.PeerInfo) string {
 	name := textsafe.Line(p.DisplayName, 32)
-	dups := 0
-	for _, o := range m.peers {
-		if strings.EqualFold(textsafe.Line(o.DisplayName, 32), name) {
-			dups++
-		}
-	}
-	if dups > 1 || !p.Trusted() && name == p.ID.Short() {
-		if name != p.ID.Short() {
-			name += " #" + p.ID.Short()
-		}
+	if name != p.ID.Short() && (m.ambiguousName(name) || !p.Trusted()) {
+		name += " #" + p.ID.Short()
 	}
 	return name
 }

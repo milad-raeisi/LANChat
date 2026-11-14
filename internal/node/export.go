@@ -33,6 +33,9 @@ const (
 	EventTransfer
 	EventNotice
 	EventNetwork
+	// EventPairCode: the verification code for a pairing the local user
+	// started is ready to be compared.
+	EventPairCode
 )
 
 // Event notifies the UI of a state change.

@@ -629,7 +629,7 @@ func cmdNetwork(m *Model, _ []string, _ string) tea.Cmd {
 		}
 		line := fmt.Sprintf("  %-8s %s, %d seen in last round", d.Name, state, d.Seen)
 		if d.LastError != "" {
-			line += " – last error: " + d.LastError
+			line += " – last error: " + textsafe.Line(d.LastError, 200)
 		}
 		lines = append(lines, line)
 	}

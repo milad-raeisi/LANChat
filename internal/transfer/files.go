@@ -204,6 +204,7 @@ func (f *IncomingFile) Finish(size int64, sha256Hex string) (string, error) {
 		_ = os.Remove(f.tmpPath)
 		return "", fmt.Errorf("move received file into place: %w", err)
 	}
+	markQuarantine(final)
 	return final, nil
 }
 

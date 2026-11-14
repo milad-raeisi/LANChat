@@ -30,6 +30,22 @@ func TestTextRemovesEscapeSequences(t *testing.T) {
 	}
 }
 
+func TestCombiningMarksAndSeparators(t *testing.T) {
+	zalgo := "a" + strings.Repeat("\u0301", 50) + "b"
+	if got := Text(zalgo); got != "a\u0301\u0301\u0301b" {
+		t.Fatalf("combining marks not capped: %q", got)
+	}
+	if got := Text("one\u2028two"); got != "one\ntwo" {
+		t.Fatalf("line separator: %q", got)
+	}
+	if got := Line("\u3164\u2800Alice", 32); got != "Alice" {
+		t.Fatalf("blank look-alikes kept in names: %q", got)
+	}
+	if got := Text("caf\u00e9 e\u0301"); got != "caf\u00e9 e\u0301" {
+		t.Fatalf("legitimate accents altered: %q", got)
+	}
+}
+
 func TestTextInvalidUTF8(t *testing.T) {
 	got := Text("a\xffb")
 	if !utf8.ValidString(got) || !strings.Contains(got, "�") {

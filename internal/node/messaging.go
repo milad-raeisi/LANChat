@@ -48,6 +48,17 @@ func (n *Node) HandleFrame(s *transport.Session, f *protocol.Frame) error {
 		}
 		n.handlePairRequest(s, req)
 		return nil
+	case protocol.TypePairNonce, protocol.TypePairReveal:
+		pn, err := protocol.DecodeBody[protocol.PairNonce](env)
+		if err != nil {
+			return err
+		}
+		if env.Type == protocol.TypePairNonce {
+			n.handlePairNonce(s, pn)
+		} else {
+			n.handlePairReveal(s, pn)
+		}
+		return nil
 	case protocol.TypePairAccept:
 		n.handlePairAccept(s)
 		return nil
@@ -92,6 +103,19 @@ func (n *Node) HandleFrame(s *transport.Session, f *protocol.Frame) error {
 		n.log.Debug("refused message from unpaired peer", "peer", string(pid), "type", env.Type)
 		return nil
 	}
+	switch body.(type) {
+	case *protocol.ChatMessage, *protocol.GroupUpdate, *protocol.FileOffer:
+		if !n.allowWork(pid) {
+			// Over the per-peer quota: drop without acknowledging. Honest
+			// senders retry queued messages later, so nothing is lost; a
+			// misbehaving peer cannot make us store more than the quota.
+			n.log.Debug("per-peer quota exceeded; message dropped", "peer", string(pid), "type", env.Type)
+			if fo, ok := body.(*protocol.FileOffer); ok {
+				_ = s.Send(protocol.TypeFileReject, protocol.FileControl{TransferID: fo.TransferID, Reason: "too many requests"})
+			}
+			return nil
+		}
+	}
 	switch b := body.(type) {
 	case *protocol.ChatMessage:
 		n.handleChat(s, b)
@@ -135,6 +159,32 @@ func decodeTrusted(env *protocol.Envelope) (any, error) {
 		return protocol.DecodeBody[protocol.FileResult](env)
 	}
 	return nil, nil
+}
+
+// Per-peer quota for work that writes to the database or opens dialogs.
+const (
+	workPerSec = 20.0
+	workBurst  = 500.0
+)
+
+func (n *Node) allowWork(pid identity.PeerID) bool {
+	now := time.Now()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ps := n.peers[pid]
+	if ps == nil {
+		return false
+	}
+	if ps.workRefill.IsZero() {
+		ps.workTokens, ps.workRefill = workBurst, now
+	}
+	ps.workTokens = min(workBurst, ps.workTokens+now.Sub(ps.workRefill).Seconds()*workPerSec)
+	ps.workRefill = now
+	if ps.workTokens < 1 {
+		return false
+	}
+	ps.workTokens--
+	return true
 }
 
 // --- conversations ----------------------------------------------------------
@@ -583,8 +633,8 @@ func (n *Node) maintenanceLoop() {
 					changed = true
 				}
 			}
-			if !ps.outgoingPair.IsZero() && now.Sub(ps.outgoingPair) > pairingWindow {
-				ps.outgoingPair = time.Time{}
+			if ps.pair != nil && now.Sub(ps.pair.started) > pairingWindow {
+				ps.pair = nil
 				changed = true
 			}
 			_, known := n.known[id]
@@ -601,6 +651,7 @@ func (n *Node) maintenanceLoop() {
 		if changed {
 			n.emit(Event{Kind: EventPeers})
 		}
+		n.failStalledTransfers(now)
 		convs, err := n.store.ExpireDeliveries(n.ctx, now.Add(-n.cfg.OfflineQueueTTL()), n.cfg.Chat.MaxRetryAttempts)
 		if err == nil {
 			for _, c := range convs {

@@ -33,9 +33,12 @@ const (
 )
 
 const (
-	offerTimeout      = 5 * time.Minute
-	resultTimeout     = 2 * time.Minute
-	maxActiveTransfer = 8
+	offerTimeout       = 5 * time.Minute
+	resultTimeout      = 2 * time.Minute
+	stallTimeout       = 2 * time.Minute
+	maxOutgoingActive  = 8
+	maxIncomingActive  = 16
+	maxIncomingPerPeer = 3
 )
 
 // TransferInfo is a snapshot of a file transfer.
@@ -74,6 +77,7 @@ type transferState struct {
 	cancel   context.CancelFunc
 	lastEmit time.Time
 	node     *Node
+	done     chan struct{} // closed when the transfer reaches a final state
 }
 
 func (t *transferState) snapshot() TransferInfo {
@@ -95,6 +99,9 @@ func (t *transferState) finish(state, errText, path string) bool {
 	}
 	if t.cancel != nil {
 		t.cancel()
+	}
+	if t.done != nil {
+		close(t.done)
 	}
 	if t.file != nil {
 		_ = t.file.Close()
@@ -188,12 +195,19 @@ func (n *Node) Transfers() []TransferInfo {
 	return out
 }
 
-func (n *Node) activeTransfers() int {
+// activeTransfers counts unfinished transfers in one direction, optionally
+// only those with a given peer.
+func (n *Node) activeTransfers(outgoing bool, peer identity.PeerID) int {
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	c := 0
+	list := make([]*transferState, 0, len(n.transfers))
 	for _, t := range n.transfers {
-		if !t.snapshot().Done() {
+		list = append(list, t)
+	}
+	n.mu.Unlock()
+	c := 0
+	for _, t := range list {
+		info := t.snapshot()
+		if !info.Done() && info.Outgoing == outgoing && (peer == "" || info.PeerID == peer) {
 			c++
 		}
 	}
@@ -234,8 +248,8 @@ func (n *Node) SendFile(ctx context.Context, peer identity.PeerID, path string) 
 	if s == nil {
 		return "", ErrNotConnected
 	}
-	if n.activeTransfers() >= maxActiveTransfer {
-		return "", fmt.Errorf("too many active transfers (limit %d)", maxActiveTransfer)
+	if n.activeTransfers(true, "") >= maxOutgoingActive {
+		return "", fmt.Errorf("too many active outgoing transfers (limit %d)", maxOutgoingActive)
 	}
 	f, name, size, err := transfer.OpenOutgoing(path)
 	if err != nil {
@@ -246,6 +260,7 @@ func (n *Node) SendFile(ctx context.Context, peer identity.PeerID, path string) 
 		node:    n,
 		info:    TransferInfo{ID: protocol.NewID(), PeerID: peer, PeerName: n.peerName(peer), Outgoing: true, Name: name, Size: size, State: TransferOffered, StartedAt: time.Now(), UpdatedAt: time.Now()},
 		session: s, file: f, accept: make(chan bool, 1), result: make(chan protocol.FileResult, 1), cancel: cancel,
+		done: make(chan struct{}),
 	}
 	n.addTransfer(t)
 	_ = n.store.SaveTransfer(ctx, storage.TransferRecord{ID: t.info.ID, PeerID: peer, Direction: "out", FileName: name, Size: size, Path: f.Name(), State: TransferOffered})
@@ -276,6 +291,10 @@ func (n *Node) runOutgoing(ctx context.Context, t *transferState) {
 		return
 	}
 	t.mu.Lock()
+	if t.info.Done() {
+		t.mu.Unlock()
+		return
+	}
 	t.info.State = TransferTransferring
 	f, s, id := t.file, t.session, t.info.ID
 	t.mu.Unlock()
@@ -366,7 +385,7 @@ func (n *Node) handleFileOffer(s *transport.Session, o *protocol.FileOffer) {
 		reject(fmt.Sprintf("file is larger than the recipient's limit of %s", HumanSize(n.cfg.MaxFileSize())))
 		return
 	}
-	if n.activeTransfers() >= maxActiveTransfer {
+	if n.activeTransfers(false, "") >= maxIncomingActive || n.activeTransfers(false, pid) >= maxIncomingPerPeer {
 		reject("recipient has too many active transfers")
 		return
 	}
@@ -375,7 +394,7 @@ func (n *Node) handleFileOffer(s *transport.Session, o *protocol.FileOffer) {
 		reject("file name is not acceptable")
 		return
 	}
-	t := &transferState{node: n, session: s, info: TransferInfo{
+	t := &transferState{node: n, session: s, done: make(chan struct{}), info: TransferInfo{
 		ID: o.TransferID, PeerID: pid, PeerName: n.peerName(pid), Name: safe, Size: o.Size,
 		State: TransferIncoming, StartedAt: time.Now(), UpdatedAt: time.Now(),
 	}}
@@ -394,6 +413,7 @@ func (n *Node) handleFileOffer(s *transport.Session, o *protocol.FileOffer) {
 					reject("not answered in time")
 				}
 			}
+		case <-t.done:
 		case <-n.ctx.Done():
 		}
 	}()
@@ -427,8 +447,15 @@ func (n *Node) RespondFile(_ context.Context, transferID string, accept bool) er
 		return err
 	}
 	t.mu.Lock()
+	if t.info.State != TransferIncoming {
+		// Cancelled while the file was being created.
+		t.mu.Unlock()
+		in.Abort()
+		return errors.New("transfer was cancelled")
+	}
 	t.incoming = in
 	t.info.State = TransferTransferring
+	t.info.UpdatedAt = time.Now()
 	t.mu.Unlock()
 	if err := s.Send(protocol.TypeFileAccept, protocol.FileControl{TransferID: transferID}); err != nil {
 		t.finish(TransferFailed, err.Error(), "")
@@ -535,6 +562,41 @@ func (n *Node) handleFileResult(s *transport.Session, r *protocol.FileResult) {
 	select {
 	case t.result <- *r:
 	default:
+	}
+}
+
+// failTransfersForSession fails unfinished transfers bound to a session
+// (used when a session is replaced by a newer one).
+func (n *Node) failTransfersForSession(s *transport.Session, reason string) {
+	n.mu.Lock()
+	var list []*transferState
+	for _, t := range n.transfers {
+		list = append(list, t)
+	}
+	n.mu.Unlock()
+	for _, t := range list {
+		t.mu.Lock()
+		match := t.session == s
+		t.mu.Unlock()
+		if match && !t.snapshot().Done() {
+			t.finish(TransferFailed, reason, "")
+		}
+	}
+}
+
+// failStalledTransfers fails transfers that stopped making progress.
+func (n *Node) failStalledTransfers(now time.Time) {
+	n.mu.Lock()
+	var list []*transferState
+	for _, t := range n.transfers {
+		list = append(list, t)
+	}
+	n.mu.Unlock()
+	for _, t := range list {
+		info := t.snapshot()
+		if info.State == TransferTransferring && now.Sub(info.UpdatedAt) > stallTimeout {
+			t.abort("no data received for two minutes")
+		}
 	}
 }
 

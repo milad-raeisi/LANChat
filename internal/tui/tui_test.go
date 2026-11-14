@@ -206,6 +206,8 @@ func press(t *testing.T, m *Model, keys ...string) {
 			msg = tea.KeyPressMsg{Code: tea.KeyTab}
 		case "down":
 			msg = tea.KeyPressMsg{Code: tea.KeyDown}
+		case "left":
+			msg = tea.KeyPressMsg{Code: tea.KeyLeft}
 		default:
 			r := []rune(k)[0]
 			msg = tea.KeyPressMsg{Code: r, Text: k}
@@ -341,9 +343,42 @@ func TestPairRequestDialogAndTypingNotInterrupted(t *testing.T) {
 	if m.dialog == nil || !strings.Contains(screen(m), "482 913") {
 		t.Fatal("queued pairing dialog with code not shown when idle")
 	}
-	press(t, m, "a")
+	// Keys typed right after the dialog opens are ignored (input guard).
+	press(t, m, "left", "left", "enter")
+	if _, answered := f.paired[p.ID]; answered || m.dialog == nil {
+		t.Fatal("dialog answered during the input guard")
+	}
+	time.Sleep(guardDuration + 50*time.Millisecond)
+	// Single letters do nothing; Enter on the default ("Later") does not accept.
+	press(t, m, "a", "y")
+	if _, answered := f.paired[p.ID]; answered || m.dialog == nil {
+		t.Fatal("a letter key answered the pairing request")
+	}
+	press(t, m, "enter")
+	if _, answered := f.paired[p.ID]; answered {
+		t.Fatal("Enter on the default button answered the request")
+	}
+	// Accepting requires selecting Accept explicitly.
+	m.setDialog(newPairRequestDialog(m, p.ID, "482 913"))
+	time.Sleep(guardDuration + 50*time.Millisecond)
+	press(t, m, "left", "left", "enter")
 	if !f.paired[p.ID] {
-		t.Fatal("accept did not reach the backend")
+		t.Fatal("explicit accept did not reach the backend")
+	}
+}
+
+func TestSpoofedNamesShowIdentity(t *testing.T) {
+	m, f := setup(t, 100, 30)
+	f.addPeer("Ali", true, true)
+	run(t, m, m.loadState())
+	f.msgs[storage.GeneralRoomID] = []storage.Message{
+		{Seq: 1, ConversationID: storage.GeneralRoomID, SenderID: "abcdefabcdefabcdefabcdefabcdefab", SenderName: "Milad (you)", Kind: storage.MessageText, Body: "trust me", SentAt: time.Now()},
+		{Seq: 2, ConversationID: storage.GeneralRoomID, SenderID: "bcdefabcdefabcdefabcdefabcdefabc", SenderName: "Milad", Kind: storage.MessageText, Body: "me too", SentAt: time.Now()},
+	}
+	run(t, m, m.loadMessages(storage.GeneralRoomID))
+	out := screen(m)
+	if !strings.Contains(out, "Milad (you) #ABCDEF") || !strings.Contains(out, "Milad #BCDEFA") {
+		t.Fatalf("impersonating names are not disambiguated:\n%s", out)
 	}
 }
 

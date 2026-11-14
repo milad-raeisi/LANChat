@@ -164,25 +164,24 @@ func pair(t testing.TB, a, b *testNode) {
 	t.Helper()
 	connect(a, b)
 	eventually(t, a.name+" and "+b.name+" connected", 10*time.Second, func() bool { return a.connectedTo(b) && b.connectedTo(a) })
-	ia, err := a.PairingInfo(b.ID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ib, err := b.PairingInfo(a.ID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ia.Code != ib.Code {
-		t.Fatalf("pairing codes differ: %s vs %s", ia.Code, ib.Code)
-	}
 	if err := a.RequestPairing(context.Background(), b.ID()); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, b.name+" sees pairing request", 5*time.Second, func() bool {
-		p, _ := b.Peer(a.ID())
-		return p.IncomingPairing
+	// Commit-then-reveal completes, then both sides show a code.
+	eventually(t, "verification codes on both sides", 5*time.Second, func() bool {
+		ia, _ := a.PairingInfo(b.ID())
+		pb, _ := b.Peer(a.ID())
+		return ia.Code != "" && pb.IncomingPairing
 	})
+	ia, _ := a.PairingInfo(b.ID())
+	ib, _ := b.PairingInfo(a.ID())
+	if ia.Code == "" || ia.Code != ib.Code {
+		t.Fatalf("pairing codes differ: %q vs %q", ia.Code, ib.Code)
+	}
 	if err := b.RespondPairing(context.Background(), a.ID(), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.RespondPairing(context.Background(), b.ID(), true); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "mutual trust", 5*time.Second, func() bool {

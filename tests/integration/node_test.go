@@ -18,6 +18,7 @@ import (
 	"github.com/milad-raeisi/LANChat/internal/network/transport"
 	"github.com/milad-raeisi/LANChat/internal/node"
 	"github.com/milad-raeisi/LANChat/internal/protocol"
+	"github.com/milad-raeisi/LANChat/internal/rooms"
 	"github.com/milad-raeisi/LANChat/internal/security/identity"
 	"github.com/milad-raeisi/LANChat/internal/storage"
 )
@@ -37,7 +38,32 @@ func TestPairingAndDirectMessage(t *testing.T) {
 		t.Fatalf("message to unpaired peer: %v", err)
 	}
 
-	pair(t, milad, maryam)
+	// One approval alone never creates trust.
+	if err := milad.RequestPairing(context.Background(), maryam.ID()); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "code ready", 5*time.Second, func() bool {
+		p, _ := maryam.Peer(milad.ID())
+		return p.IncomingPairing
+	})
+	if err := maryam.RespondPairing(context.Background(), milad.ID(), true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if p, _ := maryam.Peer(milad.ID()); p.Trusted() {
+		t.Fatal("trust granted before the other user approved")
+	}
+	if p, _ := milad.Peer(maryam.ID()); p.Trusted() {
+		t.Fatal("trust granted before the local user approved")
+	}
+	if err := milad.RespondPairing(context.Background(), maryam.ID(), true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "mutual trust", 5*time.Second, func() bool {
+		a, _ := milad.Peer(maryam.ID())
+		b, _ := maryam.Peer(milad.ID())
+		return a.Online() && b.Online()
+	})
 	p, _ := maryam.Peer(milad.ID())
 	if !p.Verified || p.Trust != storage.TrustTrusted {
 		t.Fatalf("trust not persisted: %+v", p)
@@ -427,7 +453,9 @@ func TestUntrustedAndUnsolicitedTrustIsRefused(t *testing.T) {
 	// A chat message from an unpaired peer must not be stored.
 	_ = s.Send(protocol.TypeChat, protocol.ChatMessage{MessageID: protocol.NewID(), Kind: protocol.ConvDirect, Body: "click this link", SentAt: 1})
 	// Group invitations from unpaired peers are ignored.
-	_ = s.Send(protocol.TypeGroupUpdate, protocol.GroupUpdate{GroupID: protocol.NewID(), Name: "spam", OwnerID: string(attacker.ID()), Version: 1, State: protocol.GroupActive,
+	salt := rooms.NewSalt()
+	_ = s.Send(protocol.TypeGroupUpdate, protocol.GroupUpdate{GroupID: rooms.DeriveGroupID(identity.SPKI(attacker.PublicKey()), salt), Salt: salt,
+		Name: "spam", OwnerID: string(attacker.ID()), Version: 1, State: protocol.GroupActive,
 		Members: []protocol.GroupMember{{PeerID: string(attacker.ID())}, {PeerID: string(victim.ID())}}})
 	eventually(t, "attacker visible as unpaired peer", 5*time.Second, func() bool {
 		p, ok := victim.Peer(attacker.ID())
@@ -446,6 +474,50 @@ func TestUntrustedAndUnsolicitedTrustIsRefused(t *testing.T) {
 		if c.Kind == storage.KindGroup {
 			t.Fatal("group invitation from unpaired peer accepted")
 		}
+	}
+	// Unpaired identities are never written to the database.
+	if peers, _ := victim.store.ListPeers(context.Background()); len(peers) != 0 {
+		t.Fatalf("unpaired peer persisted: %+v", peers)
+	}
+}
+
+// rawHandler records frames received by a raw test peer.
+type rawHandler struct{ frames chan *protocol.Frame }
+
+func (h *rawHandler) HandleFrame(_ *transport.Session, f *protocol.Frame) error {
+	h.frames <- f
+	return nil
+}
+func (h *rawHandler) SessionClosed(*transport.Session, error) {}
+
+func TestPairingCommitmentIsEnforced(t *testing.T) {
+	victim := startNode(t, "Victim", "")
+	s, attacker := rawPeer(t, victim, "Mallory")
+	h := &rawHandler{frames: make(chan *protocol.Frame, 32)}
+	s.Start(h)
+	defer s.Close(nil)
+	committed := protocol.NewID() + protocol.NewID()
+	_ = s.Send(protocol.TypePairRequest, protocol.PairRequest{DisplayName: "Mallory", Commit: identity.PairingCommit([]byte(committed))})
+	// The victim answers with its nonce.
+	deadline := time.After(5 * time.Second)
+	for got := false; !got; {
+		select {
+		case f := <-h.frames:
+			got = f.Kind == protocol.KindEnvelope && f.Envelope.Type == protocol.TypePairNonce
+		case <-deadline:
+			t.Fatal("no pair.nonce from victim")
+		}
+	}
+	// Reveal a different nonce than the one committed to.
+	_ = s.Send(protocol.TypePairReveal, protocol.PairNonce{Nonce: protocol.NewID() + protocol.NewID()})
+	eventually(t, "pairing aborted", 5*time.Second, func() bool {
+		p, _ := victim.Peer(attacker.ID())
+		return !p.IncomingPairing && !p.OutgoingPairing
+	})
+	_ = s.Send(protocol.TypePairAccept, protocol.PairResponse{})
+	time.Sleep(300 * time.Millisecond)
+	if p, _ := victim.Peer(attacker.ID()); p.Trusted() {
+		t.Fatal("trust granted despite commitment mismatch")
 	}
 }
 

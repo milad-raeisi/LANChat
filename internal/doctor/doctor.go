@@ -70,21 +70,23 @@ func (r *reporter) add(s Status, name, detail string) {
 	if s == Warn {
 		r.warnings++
 	}
-	line := fmt.Sprintf("[%s] %s", s, name)
+	// Details can contain text from the network (peer names, error
+	// messages from remote peers or servers): sanitize before printing.
+	line := fmt.Sprintf("[%s] %s", s, textsafe.Line(name, 200))
 	if detail != "" {
-		line += " – " + detail
+		line += " – " + textsafe.Line(detail, 600)
 	}
 	fmt.Fprintln(r.out, line)
 }
 
 func (r *reporter) detail(format string, args ...any) {
 	if r.verbose {
-		fmt.Fprintf(r.out, "       "+format+"\n", args...)
+		fmt.Fprintln(r.out, "       "+textsafe.Line(fmt.Sprintf(format, args...), 600))
 	}
 }
 
 func (r *reporter) hint(format string, args ...any) {
-	fmt.Fprintf(r.out, "       ↳ "+format+"\n", args...)
+	fmt.Fprintln(r.out, "       ↳ "+textsafe.Line(fmt.Sprintf(format, args...), 600))
 }
 
 // Run executes the diagnostics, writes a report and returns the number of

@@ -396,13 +396,12 @@ func (w *wizard) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (w *wizard) View() tea.View {
 	st := w.st
 	width := min(max(40, w.width-4), 78)
-	banner := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(w.theme.Accent).
-		Width(width).Align(lipgloss.Center).Padding(1, 0).
-		Render(st.accent.Render("LANChat") + "\n" + st.text.Render("Local Network Messenger") + "\n\n" + st.muted.Render("Private. Local. Simple."))
 	var b []string
-	b = append(b, banner, "")
+	b = append(b, w.banner(width), "")
 	stepTitle := func(n int, t string) string {
-		return st.accent.Render(fmt.Sprintf("Step %d of 4 · %s", n, t))
+		const steps = 4
+		dots := st.accent.Render(strings.Repeat("● ", n)) + st.muted.Render(strings.Repeat("○ ", steps-n))
+		return dots + " " + st.accent.Render(fmt.Sprintf("Step %d of %d", n, steps)) + st.muted.Render(" · ") + st.text.Bold(true).Render(t)
 	}
 	switch w.step {
 	case wsName:
@@ -445,12 +444,12 @@ func (w *wizard) View() tea.View {
 			b = append(b, st.muted.Render("Running checks…"))
 		}
 		for _, c := range w.checks {
-			tag := st.success.Render("[ OK ]")
+			tag := st.success.Render("✓ OK  ")
 			switch c.status {
 			case "warn":
-				tag = st.warn.Render("[WARN]")
+				tag = st.warn.Render("⚠ WARN")
 			case "fail":
-				tag = st.err.Render("[FAIL]")
+				tag = st.err.Render("✗ FAIL")
 			}
 			b = append(b, ansi.Truncate(tag+" "+c.name+": "+st.muted.Render(c.detail), width, "…"))
 		}
@@ -483,6 +482,26 @@ func (w *wizard) View() tea.View {
 	v.AltScreen = true
 	v.WindowTitle = "LANChat setup"
 	return v
+}
+
+// logo is "LANCHAT" in block letters; both rows have the same number of
+// runes so the gradient lines up column by column.
+var logo = [2]string{
+	"█   ▄▀█ █▄ █ █▀▀ █ █ ▄▀█ ▀█▀",
+	"█▄▄ █▀█ █ ▀█ █▄▄ █▀█ █▀█  █ ",
+}
+
+// banner is the wizard's title card: the block logo in a rounded box, or
+// a single line when the terminal is short (the last step is the longest).
+func (w *wizard) banner(width int) string {
+	st := w.st
+	if w.height < 22 || (w.step == wsChecks && w.height < 36) {
+		return st.gradient("◆ LANChat", lipgloss.NewStyle()) + st.text.Render("  Local Network Messenger") + st.muted.Render(" · Private. Local. Simple.")
+	}
+	body := st.gradient(logo[0], lipgloss.NewStyle()) + "\n" + st.gradient(logo[1], lipgloss.NewStyle()) + "\n\n" +
+		st.text.Bold(true).Render("Local Network Messenger") + "\n" + st.muted.Render("Private · Local · Encrypted")
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(w.theme.Border).
+		Width(width).Align(lipgloss.Center).Padding(1, 0).Render(body)
 }
 
 func (w *wizard) ifaceLine(i int, label string) string {

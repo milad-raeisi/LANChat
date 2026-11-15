@@ -7,6 +7,17 @@ separately (currently protocol v1).
 
 ## [Unreleased]
 
+### Changed
+- Refreshed terminal interface: rounded, titled panels for the chat list,
+  the conversation and the message box, with the focused panel highlighted;
+  a gradient LANChat logo and status pill in the header; coloured per-sender
+  gutter bars; unread badges; key-cap hints in the footer that drop whole
+  hints when space runs out; and a progress bar for file transfers.
+- Short conversations sit at the bottom next to the input, and an empty
+  room shows a welcome card with the first steps.
+- The setup wizard has a block-letter logo and step progress dots, and its
+  checks use ✓/⚠/✗ markers.
+
 ## [0.1.0] - 2026-11-15
 
 First public release.

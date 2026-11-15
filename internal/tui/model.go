@@ -129,6 +129,7 @@ type Model struct {
 	hasOlder  bool
 	loading   bool
 	follow    bool
+	empty     bool // the open conversation shows its empty state
 	clearedAt map[string]int64
 	vp        viewport.Model
 	input     textarea.Model

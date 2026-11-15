@@ -33,7 +33,8 @@ func TestScreenshot(t *testing.T) {
 		storage.Conversation{ID: storage.DirectConversationID(maryam.ID), Kind: storage.KindDirect, Title: "Maryam", PeerID: maryam.ID, Joined: true, Unread: 2},
 		storage.Conversation{ID: "group:00112233445566778899aabbccddeeff", Kind: storage.KindGroup, Title: "Project X", Joined: true},
 	)
-	base := time.Date(2026, 11, 14, 10, 42, 0, 0, time.Local)
+	now := time.Now()
+	base := time.Date(now.Year(), now.Month(), now.Day(), 10, 42, 0, 0, time.Local) // shows as "Today"
 	msg := func(seq int64, sender node.PeerInfo, body string, min int, out bool, d storage.DeliverySummary) storage.Message {
 		return storage.Message{Seq: seq, ConversationID: storage.GeneralRoomID, SenderID: sender.ID, SenderName: sender.DisplayName,
 			Kind: storage.MessageText, Body: body, SentAt: base.Add(time.Duration(min) * time.Minute), Outgoing: out, Delivery: d}

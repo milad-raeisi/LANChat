@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/milad-raeisi/LANChat/internal/config"
 	"github.com/milad-raeisi/LANChat/internal/node"
@@ -194,6 +195,9 @@ func setup(t *testing.T, w, h int) (*Model, *fakeBackend) {
 
 func screen(m *Model) string { return m.View().Content }
 
+// visible is the screen as the user reads it, without escape sequences.
+func visible(m *Model) string { return ansi.Strip(screen(m)) }
+
 func press(t *testing.T, m *Model, keys ...string) {
 	for _, k := range keys {
 		var msg tea.KeyPressMsg
@@ -229,7 +233,7 @@ func TestRenderSizes(t *testing.T) {
 		m, f := setup(t, size[0], size[1])
 		f.addPeer("Maryam", true, true)
 		run(t, m, m.loadState())
-		out := screen(m)
+		out := visible(m)
 		lines := strings.Split(out, "\n")
 		if len(lines) > size[1] {
 			t.Errorf("%dx%d: rendered %d lines", size[0], size[1], len(lines))
@@ -408,7 +412,7 @@ func TestThemesRender(t *testing.T) {
 		f.cfg.UI.Theme = name
 		m := NewModel(f, nil)
 		m.Update(tea.WindowSizeMsg{Width: 90, Height: 25})
-		if out := screen(m); !strings.Contains(out, "LANChat") {
+		if out := visible(m); !strings.Contains(out, "LANChat") {
 			t.Fatalf("theme %s failed to render", name)
 		}
 	}

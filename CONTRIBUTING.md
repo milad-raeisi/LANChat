@@ -66,8 +66,14 @@ Releases are automatic. To publish version `X.Y.Z`:
    `vX.Y.Z` and publishes the binaries, packages, checksums and SBOMs.
 
 The version must be higher than the latest release and the tag must not
-exist yet. Pull requests that do not change `VERSION` never publish anything.
-A maintainer can also release by pushing a `vX.Y.Z` tag manually.
+exist yet. The Release workflow runs on every push to `main` but publishes
+only while `VERSION` names an unreleased version; if the check fails (for
+example, the changelog section is missing), fix it in a follow-up pull
+request and the next push to `main` releases. A maintainer can also release
+by pushing a `vX.Y.Z` tag manually.
+
+The README screenshots are generated from the real interface: run
+`make screenshots` after changing what the main screens look like.
 
 ## Pull requests
 

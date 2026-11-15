@@ -87,13 +87,19 @@ func (m *Model) View() tea.View {
 	return v
 }
 
+// overlay draws the dialog over the screen, centred horizontally and a
+// third of the way down. Positions must go through a Compositor: a Layer
+// composed directly onto a Canvas ignores its X/Y and repaints the whole
+// canvas, which would hide the screen behind the dialog.
 func (m *Model) overlay(base, dlg string) string {
-	c := lipgloss.NewCanvas(m.width, m.height)
-	c.Compose(lipgloss.NewLayer(base))
 	w, h := lipgloss.Size(dlg)
 	x := max(0, (m.width-w)/2)
 	y := max(0, (m.height-h)/3)
-	c.Compose(lipgloss.NewLayer(dlg).X(x).Y(y).Z(1))
+	c := lipgloss.NewCanvas(m.width, m.height)
+	c.Compose(lipgloss.NewCompositor(
+		lipgloss.NewLayer(base),
+		lipgloss.NewLayer(dlg).X(x).Y(y).Z(1),
+	))
 	return c.Render()
 }
 

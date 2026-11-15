@@ -1,14 +1,16 @@
 name: Release
 
-# Releases are automatic: when a change to the VERSION file lands on main
-# (normally by merging a pull request that bumps it), this workflow checks
-# the version, runs the tests, tags the commit as vX.Y.Z and publishes the
-# release with GoReleaser. Pushing a vX.Y.Z tag by hand releases that tag.
-# Pull requests never trigger it.
+# Releases are automatic: on every push to main this workflow compares the
+# VERSION file with the published tags. When VERSION names a version that is
+# not released yet (normally after merging a pull request that bumps it), it
+# checks the version and changelog, runs the tests, tags the commit as
+# vX.Y.Z and publishes the release with GoReleaser; otherwise it stops after
+# the comparison. Pushing a vX.Y.Z tag by hand releases that tag. Pull
+# requests never trigger it. There is deliberately no path filter: a missed
+# trigger, or a changelog fix pushed after the bump, must still release.
 on:
   push:
     branches: [main]
-    paths: [VERSION]
     tags: ["v*.*.*"]
   workflow_dispatch:
 
@@ -29,9 +31,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history and tags, needed for the version check and changelog
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
 
       - name: Decide what to release
         id: plan
@@ -55,6 +54,11 @@ jobs:
             echo "create_tag=${create_tag}"
           } >> "$GITHUB_OUTPUT"
           echo "Releasing v${version}"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.plan.outputs.release == 'true'
+        with:
+          go-version-file: go.mod
 
       - name: Test before releasing
         if: steps.plan.outputs.release == 'true'

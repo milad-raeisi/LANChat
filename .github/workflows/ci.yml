@@ -68,12 +68,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Validate VERSION when this pull request changes it
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
+      - name: Validate VERSION when merging would publish a release
         run: |
-          if git diff --quiet "$BASE" HEAD -- VERSION; then
-            echo "VERSION unchanged: merging will not publish a release."
+          if [ "$(scripts/version.sh status)" = "exists" ]; then
+            echo "v$(scripts/version.sh current) is already released: merging will not publish a release."
           else
             scripts/version.sh check
             echo "Merging this pull request will publish v$(scripts/version.sh current)."

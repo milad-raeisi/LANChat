@@ -53,6 +53,22 @@ discovery and sessions, `internal/protocol` the wire format,
   the protocol version and document it in `docs/protocol.md`.
 - Update `CHANGELOG.md` and the relevant documentation in the same change.
 
+## Releasing
+
+Releases are automatic. To publish version `X.Y.Z`:
+
+1. In a pull request, set the `VERSION` file to `X.Y.Z` (semantic versioning;
+   `X.Y.Z-rc.1` publishes a pre-release).
+2. Move the entries under `## [Unreleased]` in `CHANGELOG.md` into a new
+   `## [X.Y.Z] - YYYY-MM-DD` section. Its text becomes the release notes.
+3. Run `make release-check`. CI runs the same check on the pull request.
+4. Merge. The Release workflow tests the merged commit, creates the tag
+   `vX.Y.Z` and publishes the binaries, packages, checksums and SBOMs.
+
+The version must be higher than the latest release and the tag must not
+exist yet. Pull requests that do not change `VERSION` never publish anything.
+A maintainer can also release by pushing a `vX.Y.Z` tag manually.
+
 ## Pull requests
 
 1. Open an issue first for larger changes.

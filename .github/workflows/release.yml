@@ -1,37 +1,98 @@
 name: Release
 
-# Releases are created only from version tags pushed by maintainers
-# (for example `git tag v1.0.0 && git push origin v1.0.0`), never from
-# pull requests. The release is created as a draft for review.
+# Releases are automatic: when a change to the VERSION file lands on main
+# (normally by merging a pull request that bumps it), this workflow checks
+# the version, runs the tests, tags the commit as vX.Y.Z and publishes the
+# release with GoReleaser. Pushing a vX.Y.Z tag by hand releases that tag.
+# Pull requests never trigger it.
 on:
   push:
+    branches: [main]
+    paths: [VERSION]
     tags: ["v*.*.*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
-      contents: write # create the draft GitHub release and upload artifacts
+      contents: write # push the tag and publish the release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
-          persist-credentials: false
+          fetch-depth: 0 # full history and tags, needed for the version check and changelog
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Decide what to release
+        id: plan
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            create_tag=false
+          else
+            version="$(scripts/version.sh current)"
+            if [ "$(scripts/version.sh status)" = "exists" ]; then
+              echo "v${version} is already released; nothing to do."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            scripts/version.sh check
+            create_tag=true
+          fi
+          {
+            echo "release=true"
+            echo "version=${version}"
+            echo "create_tag=${create_tag}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing v${version}"
+
       - name: Test before releasing
+        if: steps.plan.outputs.release == 'true'
         run: go test -race -count=1 ./...
+
+      - name: Tag the release commit
+        if: steps.plan.outputs.create_tag == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${VERSION}" -m "LANChat v${VERSION}"
+          git push origin "v${VERSION}"
+
+      - name: Release notes from CHANGELOG.md
+        id: notes
+        if: steps.plan.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          if scripts/version.sh notes "$VERSION" > "$RUNNER_TEMP/release-notes.md"; then
+            echo "args=--release-notes=$RUNNER_TEMP/release-notes.md" >> "$GITHUB_OUTPUT"
+          else
+            echo "No CHANGELOG.md section for $VERSION; GoReleaser will use the git log."
+            echo "args=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install syft (SBOM generation)
+        if: steps.plan.outputs.release == 'true'
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+
       - name: GoReleaser
+        if: steps.plan.outputs.release == 'true'
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: release --clean ${{ steps.notes.outputs.args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -12,7 +12,7 @@ BIN      := bin
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
-.PHONY: all build install test race unit integration e2e fuzz bench lint fmt vet staticcheck vuln invisible cross snapshot docker-discovery clean help
+.PHONY: all build install test race unit integration e2e fuzz bench lint fmt vet staticcheck vuln invisible cross snapshot release-check docker-discovery clean help
 
 all: lint test build ## Lint, test and build
 
@@ -71,6 +71,9 @@ cross: ## Cross-compile for every supported platform
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o /dev/null ./cmd/lanchat || exit 1; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build $(GOFLAGS) -o /dev/null ./cmd/lanchat-discovery || exit 1; \
 	done
+
+release-check: ## Check that VERSION and CHANGELOG.md are ready for a release
+	./scripts/version.sh check
 
 snapshot: ## Build release artifacts locally with GoReleaser (no publishing)
 	goreleaser release --snapshot --clean

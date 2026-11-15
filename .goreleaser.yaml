@@ -127,7 +127,9 @@ release:
   github:
     owner: milad-raeisi
     name: LANChat
-  draft: true
+  # Published immediately; versions with a pre-release suffix (1.2.0-rc.1)
+  # are marked as pre-releases, which the one-line installers skip.
+  draft: false
   prerelease: auto
   footer: |
     Verify downloads with `sha256sum -c checksums.txt`. SBOMs (SPDX JSON) are attached per archive.

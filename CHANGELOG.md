@@ -7,6 +7,10 @@ separately (currently protocol v1).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-15
+
+First public release.
+
 ### Added
 - Terminal user interface (Bubble Tea v2) with first-run setup wizard,
   responsive/compact layouts, four themes, command palette, search,

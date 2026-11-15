@@ -64,7 +64,9 @@ module version in `lanchat --version`.
 
 ## Release archives
 
-Every tagged release on the [Releases page](https://github.com/milad-raeisi/LANChat/releases)
+Releases are published automatically when the `VERSION` file changes on
+`main` (see [CONTRIBUTING.md](../CONTRIBUTING.md#releasing)). Every release on
+the [Releases page](https://github.com/milad-raeisi/LANChat/releases)
 contains archives for `darwin`, `linux` and `windows` on `amd64` and `arm64`,
 `.deb` and `.rpm` packages for Linux, `checksums.txt` and an SPDX SBOM per
 archive. Verify and install manually:

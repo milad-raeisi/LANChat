@@ -3,32 +3,62 @@ package tui
 import (
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
+	"charm.land/lipgloss/v2"
 
 	"github.com/milad-raeisi/LANChat/internal/network/netif"
 	"github.com/milad-raeisi/LANChat/internal/node"
+	"github.com/milad-raeisi/LANChat/internal/platform"
 	"github.com/milad-raeisi/LANChat/internal/storage"
 )
 
-// TestScreenshot renders the real chat screen with sample data and writes
-// it as plain text to $LANCHAT_SCREENSHOT. It is used to keep the README
-// screenshot accurate: `LANCHAT_SCREENSHOT=/tmp/s.txt go test -run Screenshot ./internal/tui/`.
+// TestScreenshot renders the real screens with sample data and writes them
+// as SVG images to the directory $LANCHAT_SCREENSHOTS. It keeps the README
+// screenshots accurate: run `make screenshots`.
 func TestScreenshot(t *testing.T) {
-	path := os.Getenv("LANCHAT_SCREENSHOT")
-	if path == "" {
-		t.Skip("set LANCHAT_SCREENSHOT to write a screenshot")
+	dir := os.Getenv("LANCHAT_SCREENSHOTS")
+	if dir == "" {
+		t.Skip("set LANCHAT_SCREENSHOTS to a directory to write the screenshots")
 	}
+	write := func(name, svg string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(svg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const cols, rows = 100, 26
+
+	m, reza := sampleChat(t, cols, rows)
+	write("chat.svg", svgScreenshot(screen(m), cols, rows, "LANChat",
+		"The LANChat chat screen: a list of rooms, groups and people on the left, the #general room with messages and delivery receipts on the right, and the message box below."))
+
+	m.setDialog(newPairRequestDialog(m, reza.ID, "482 913"))
+	time.Sleep(guardDuration + 50*time.Millisecond)
+	write("pairing.svg", svgScreenshot(screen(m), cols, rows, "LANChat",
+		"A pairing request from Reza: both people compare the same six-digit code before accepting."))
+
+	w := newWizard(platform.Dirs{Config: t.TempDir(), Data: t.TempDir()}, nil)
+	w.Update(tea.WindowSizeMsg{Width: 88, Height: 26})
+	w.name.SetValue("Milad")
+	w.name.CursorEnd()
+	out := strings.TrimRight(w.View().Content, "\n ")
+	ww, wh := lipgloss.Size(out)
+	write("setup.svg", svgScreenshot(out, ww+1, wh+1, "LANChat setup",
+		"The first-run setup wizard with the LANChat logo, asking for a display name (step 1 of 4)."))
+}
+
+// sampleChat is the chat screen with a few people and messages.
+func sampleChat(t *testing.T, w, h int) (*Model, node.PeerInfo) {
 	f := newFake(t)
 	maryam := f.addPeer("Maryam", true, true)
-	f.addPeer("Ali", true, true)
+	ali := f.addPeer("Ali", true, true)
 	f.addPeer("Yumna", true, false)
 	reza := f.addPeer("Reza", false, true)
-	_ = reza
 	f.convs = append(f.convs,
 		storage.Conversation{ID: storage.DirectConversationID(maryam.ID), Kind: storage.KindDirect, Title: "Maryam", PeerID: maryam.ID, Joined: true, Unread: 2},
 		storage.Conversation{ID: "group:00112233445566778899aabbccddeeff", Kind: storage.KindGroup, Title: "Project X", Joined: true},
@@ -40,7 +70,6 @@ func TestScreenshot(t *testing.T) {
 			Kind: storage.MessageText, Body: body, SentAt: base.Add(time.Duration(min) * time.Minute), Outgoing: out, Delivery: d}
 	}
 	me := node.PeerInfo{ID: f.self.ID, DisplayName: "Milad"}
-	ali := f.peers[1]
 	f.msgs[storage.GeneralRoomID] = []storage.Message{
 		msg(1, maryam, "Hello everyone!", 0, false, storage.DeliverySummary{}),
 		msg(2, ali, "Good morning! The build server is back up.", 1, false, storage.DeliverySummary{}),
@@ -52,15 +81,8 @@ func TestScreenshot(t *testing.T) {
 		Interfaces: []netif.Interface{{Name: "en0", Up: true, Multicast: true, Addrs: []netif.Addr{{IP: netip.MustParseAddr("192.168.1.10"), Prefix: 24}}}}}
 	f.members = []node.PeerInfo{maryam, ali}
 	m := NewModel(f, nil)
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 26})
+	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	run(t, m, m.loadState())
 	run(t, m, m.loadMessages(m.current))
-	out := ansi.Strip(m.View().Content)
-	var lines []string
-	for _, l := range strings.Split(out, "\n") {
-		lines = append(lines, strings.TrimRight(l, " "))
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	return m, reza
 }

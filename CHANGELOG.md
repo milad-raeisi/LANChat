@@ -7,6 +7,8 @@ separately (currently protocol v1).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-15
+
 ### Changed
 - Refreshed terminal interface: rounded, titled panels for the chat list,
   the conversation and the message box, with the focused panel highlighted;
@@ -17,6 +19,17 @@ separately (currently protocol v1).
   room shows a welcome card with the first steps.
 - The setup wizard has a block-letter logo and step progress dots, and its
   checks use ✓/⚠/✗ markers.
+- The README shows real screenshots of the chat screen, the setup wizard and
+  a pairing request (`make screenshots` regenerates them).
+- Releases: the Release workflow now runs on every push to `main` and
+  publishes whenever `VERSION` names a version that is not released yet, so
+  a release is no longer missed when the path filter does not fire or when
+  the changelog section lands after the version bump.
+
+### Fixed
+- Dialogs (pairing, command palette, help, confirmations) are drawn centred
+  over the screen again; previously they appeared in the top-left corner and
+  blanked the rest of the screen.
 
 ## [0.1.0] - 2026-11-15
 

@@ -429,3 +429,30 @@ func TestResizeKeepsWorking(t *testing.T) {
 		t.Fatal("input broken after resizes")
 	}
 }
+
+// A dialog is drawn over the screen, which stays visible around it.
+func TestDialogOverlayKeepsScreen(t *testing.T) {
+	m, f := setup(t, 100, 30)
+	p := f.addPeer("Reza", false, true)
+	run(t, m, m.loadState())
+	m.setDialog(newPairRequestDialog(m, p.ID, "482 913"))
+	lines := strings.Split(visible(m), "\n")
+	if !strings.Contains(lines[0], "LANChat") {
+		t.Fatalf("header hidden behind the dialog: %q", lines[0])
+	}
+	found := false
+	for _, l := range lines {
+		if i := strings.Index(l, "Pairing request from Reza"); i > 0 {
+			found = true
+			if lipgloss.Width(l[:i]) < 10 {
+				t.Fatalf("dialog not centred: %q", l)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("dialog not shown")
+	}
+	if !strings.Contains(lines[len(lines)-1], "send") && !strings.Contains(lines[len(lines)-1], "Enter") {
+		t.Fatalf("footer hidden behind the dialog: %q", lines[len(lines)-1])
+	}
+}

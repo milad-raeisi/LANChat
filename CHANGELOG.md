@@ -26,6 +26,16 @@ separately (currently protocol v1).
   (`scripts/install.ps1`) with checksum verification.
 - GoReleaser packaging, GitHub Actions CI and tag-only release workflow.
 
+### Fixed
+- A recipient's rejection could be overwritten by the sender's own "sent"
+  update when the acknowledgement arrived first (fast networks), so a
+  rejected message showed "✓ sent" instead of "✗ failed".
+- Windows: the lock holder's PID is readable (shown by `lanchat doctor`).
+- Sending on a session that had just closed could report success (a Go
+  `select` picks randomly between a free queue slot and the closed signal),
+  so messages to a peer that had gone offline could show "✓ sent" instead
+  of "◷ queued". Sends now fail with ErrClosed once a session is closed.
+
 ### Security
 - Pairing codes use commit-then-reveal nonces so they cannot be ground by a
   man-in-the-middle; trust requires approval by both users on one session.

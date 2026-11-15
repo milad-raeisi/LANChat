@@ -174,19 +174,29 @@ func (s *Session) Send(typ string, body any) error {
 	if err != nil {
 		return err
 	}
-	select {
-	case <-s.closed:
+	if !s.Alive() {
 		return ErrClosed
-	default:
 	}
 	select {
 	case s.ctrl <- frame:
-		return nil
+		return s.queued()
 	case <-s.closed:
 		return ErrClosed
 	default:
 		return ErrBackpressure
 	}
+}
+
+// queued reports the outcome of a successful enqueue. A select with both a
+// free queue slot and a closed session picks one at random, and a session
+// can close while a frame is being queued; in both cases the frame will
+// never be written, so report ErrClosed rather than success. (Success still
+// only means "queued on a live session", never "delivered".)
+func (s *Session) queued() error {
+	if !s.Alive() {
+		return ErrClosed
+	}
+	return nil
 }
 
 // SendWait queues an envelope, waiting for queue space.
@@ -195,9 +205,12 @@ func (s *Session) SendWait(ctx context.Context, typ string, body any) error {
 	if err != nil {
 		return err
 	}
+	if !s.Alive() {
+		return ErrClosed
+	}
 	select {
 	case s.ctrl <- frame:
-		return nil
+		return s.queued()
 	case <-s.closed:
 		return ErrClosed
 	case <-ctx.Done():
@@ -208,9 +221,12 @@ func (s *Session) SendWait(ctx context.Context, typ string, body any) error {
 // SendBulk queues a pre-encoded bulk frame (file chunk), waiting for space.
 // Control frames are always written before pending bulk frames.
 func (s *Session) SendBulk(ctx context.Context, frame []byte) error {
+	if !s.Alive() {
+		return ErrClosed
+	}
 	select {
 	case s.bulk <- frame:
-		return nil
+		return s.queued()
 	case <-s.closed:
 		return ErrClosed
 	case <-ctx.Done():

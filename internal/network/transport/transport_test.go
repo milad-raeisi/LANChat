@@ -334,6 +334,31 @@ func TestPriorityAndBackpressure(t *testing.T) {
 	}
 }
 
+// Sending on a closed session must never report success, even though the
+// queues still have free space (a select would otherwise pick at random).
+func TestSendOnClosedSessionFails(t *testing.T) {
+	a, b := cfgFor(t, "a"), cfgFor(t, "b")
+	srv, cli, err := pair(t, a, b, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close(nil)
+	cli.Close(nil)
+	ctx := context.Background()
+	ping := protocol.Ping{Nonce: protocol.NewID()}
+	for i := 0; i < 2000; i++ {
+		if err := cli.SendWait(ctx, protocol.TypePing, ping); !errors.Is(err, ErrClosed) {
+			t.Fatalf("SendWait on a closed session returned %v (iteration %d)", err, i)
+		}
+		if err := cli.Send(protocol.TypePing, ping); !errors.Is(err, ErrClosed) {
+			t.Fatalf("Send on a closed session returned %v (iteration %d)", err, i)
+		}
+		if err := cli.SendBulk(ctx, []byte{0}); !errors.Is(err, ErrClosed) {
+			t.Fatalf("SendBulk on a closed session returned %v (iteration %d)", err, i)
+		}
+	}
+}
+
 func TestBurstIsThrottledNotDisconnected(t *testing.T) {
 	a, b := cfgFor(t, "a"), cfgFor(t, "b")
 	srv, cli, err := pair(t, a, b, "")
